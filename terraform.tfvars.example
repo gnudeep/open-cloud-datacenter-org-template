@@ -1,0 +1,61 @@
+# ══════════════════════════════════════════════════════════════
+# terraform.tfvars — Customize for your environment
+# ══════════════════════════════════════════════════════════════
+
+harvester_kubeconfig = "~/.kube/harvester.yaml"
+namespace            = "harvester-public"
+
+# ── Harvester Nodes ──
+# List all node hostnames in your Harvester cluster
+harvester_node_names = [
+  "harvester-node-0",
+  "harvester-node-1",
+  "harvester-node-2",
+]
+
+# ── Cluster Network ──
+# Physical NIC(s) on each node for VLAN trunk to switch
+cluster_network_name = "vpc-trunk"
+uplink_nics          = ["eth1"]      # Change to your actual trunk NIC
+bond_mode            = "active-backup"
+
+# ── Management / WAN ──
+mgmt_network_gateway = "192.168.1.1"  # Your basic firewall IP
+vyos_mgmt_ip         = "192.168.1.10" # Static IP for VyOS on mgmt network
+vyos_mgmt_cidr       = "24"
+
+# ── VLAN Definitions ──
+vlans = {
+  public = {
+    vlan_id = 100
+    cidr    = "10.100.0.0/24"
+    gateway = "10.100.0.1"
+  }
+  private = {
+    vlan_id = 200
+    cidr    = "10.200.0.0/24"
+    gateway = "10.200.0.1"
+  }
+  system = {
+    vlan_id = 300
+    cidr    = "10.300.0.0/24"
+    gateway = "10.300.0.1"
+  }
+  data = {
+    vlan_id = 400
+    cidr    = "10.400.0.0/24"
+    gateway = "10.400.0.1"
+  }
+}
+
+# ── VyOS Router VM ──
+vyos_image_url = "https://github.com/vyos/vyos-rolling-nightly-builds/releases/download/1.5-rolling-202402120023/vyos-1.5-rolling-202402120023-cloud-init-10G-qemu.qcow2"
+vyos_cpu       = 2
+vyos_memory    = "2Gi"
+vyos_disk_size = "10Gi"
+
+# ── SSH ──
+ssh_public_key = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIxxx your-key-here"
+
+# ── DNS ──
+upstream_dns = ["8.8.8.8", "1.1.1.1"]

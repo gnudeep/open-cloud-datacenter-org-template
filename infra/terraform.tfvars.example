@@ -1,0 +1,37 @@
+# ══════════════════════════════════════════════════════════════
+# Platform infra/terraform.tfvars — Edit and save as terraform.tfvars
+# ══════════════════════════════════════════════════════════════
+
+harvester_kubeconfig = "~/.kube/harvester.yaml"
+cluster_network_name = "vpc-trunk"
+
+# ── Rancher2 Connection ──
+# Harvester embeds Rancher; its API lives at https://<harvester-vip>
+# Generate: Rancher UI → User Menu (top-right) → API Keys → Add Key
+rancher_url        = "https://192.168.1.100"      # Replace with your Harvester VIP
+rancher_access_key = "token-xxxxx"                 # Replace with your API key
+rancher_secret_key = "xxxxxxxxxxxxxxxxxxxxxxxx"    # Replace with your API secret
+rancher_insecure   = true                          # Set false if you have a valid TLS cert
+rancher_cluster_id = "local"                       # "local" for Harvester's own cluster
+
+# ── All Harvester node hostnames ──
+harvester_node_names = [
+  "harvester-node-0",
+  "harvester-node-1",
+  "harvester-node-2",
+]
+
+# ── Physical NIC carrying VLAN trunk to switch ──
+uplink_nics = ["eth1"]
+bond_mode   = "active-backup"
+
+# ── SRE Teams ──
+# Add a new entry for each team. offset must be unique and 1-based.
+# Run `terraform apply` after adding a team to provision namespace + RBAC.
+sre_teams = {
+  "sre-alpha" = { offset = 1 }   # VLANs: 100,200,300,400 | Subnets: 10.1.x.0/24 | VyOS: 192.168.1.10
+  "sre-beta"  = { offset = 2 }   # VLANs: 110,210,310,410 | Subnets: 10.2.x.0/24 | VyOS: 192.168.1.20
+  "sre-gamma" = { offset = 3 }   # VLANs: 120,220,320,420 | Subnets: 10.3.x.0/24 | VyOS: 192.168.1.30
+  # "sre-delta"   = { offset = 4 }  # Uncomment to add team
+  # "sre-epsilon" = { offset = 5 }  # Uncomment to add team
+}

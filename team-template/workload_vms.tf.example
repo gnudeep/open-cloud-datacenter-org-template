@@ -1,0 +1,271 @@
+# ══════════════════════════════════════════════════════════════
+# Example: Workload VMs on VPC VLANs
+#
+# This file shows how to create VMs on each VLAN zone
+# after the VPC network and VyOS router are deployed.
+# Uncomment and customize as needed.
+# ══════════════════════════════════════════════════════════════
+
+# ── Ubuntu base image for workload VMs ──
+# resource "harvester_image" "ubuntu" {
+#   name         = "ubuntu-2404"
+#   namespace    = var.namespace
+#   display_name = "Ubuntu 24.04 LTS Cloud"
+#   source_type  = "download"
+#   url          = "https://cloud-images.ubuntu.com/noble/current/noble-server-cloudimg-amd64.img"
+#
+#   timeouts {
+#     create = "15m"
+#   }
+# }
+
+# ══════════════════════════════════════════════════════════════
+# K8s Nodes — Private VLAN (200)
+# ══════════════════════════════════════════════════════════════
+# resource "harvester_virtualmachine" "k8s_control_plane" {
+#   count     = 3
+#   name      = "k8s-cp-${count.index}"
+#   namespace = var.namespace
+#
+#   cpu          = 4
+#   memory       = "8Gi"
+#   run_strategy = "RerunOnFailure"
+#   hostname     = "k8s-cp-${count.index}"
+#   machine_type = "q35"
+#
+#   ssh_keys = [harvester_ssh_key.vpc_key.id]
+#
+#   tags = {
+#     role     = "k8s-control-plane"
+#     vlan     = "private"
+#     ssh-user = "ubuntu"
+#   }
+#
+#   # K8s nodes live on the Private VLAN
+#   network_interface {
+#     name         = "nic-private"
+#     model        = "virtio"
+#     type         = "bridge"
+#     network_name = harvester_network.vpc_vlans["private"].id
+#     wait_for_lease = true
+#   }
+#
+#   disk {
+#     name       = "rootdisk"
+#     type       = "disk"
+#     size       = "50Gi"
+#     bus        = "virtio"
+#     boot_order = 1
+#     image      = harvester_image.ubuntu.id
+#     auto_delete = true
+#   }
+#
+#   cloudinit {
+#     user_data = <<-EOT
+#       #cloud-config
+#       hostname: k8s-cp-${count.index}
+#       package_update: true
+#       packages:
+#         - qemu-guest-agent
+#         - curl
+#         - apt-transport-https
+#       runcmd:
+#         - systemctl enable --now qemu-guest-agent
+#     EOT
+#   }
+#
+#   depends_on = [harvester_virtualmachine.vyos_router]
+# }
+
+# resource "harvester_virtualmachine" "k8s_worker" {
+#   count     = 3
+#   name      = "k8s-worker-${count.index}"
+#   namespace = var.namespace
+#
+#   cpu          = 8
+#   memory       = "16Gi"
+#   run_strategy = "RerunOnFailure"
+#   hostname     = "k8s-worker-${count.index}"
+#   machine_type = "q35"
+#
+#   ssh_keys = [harvester_ssh_key.vpc_key.id]
+#
+#   tags = {
+#     role     = "k8s-worker"
+#     vlan     = "private"
+#     ssh-user = "ubuntu"
+#   }
+#
+#   network_interface {
+#     name         = "nic-private"
+#     model        = "virtio"
+#     type         = "bridge"
+#     network_name = harvester_network.vpc_vlans["private"].id
+#     wait_for_lease = true
+#   }
+#
+#   disk {
+#     name       = "rootdisk"
+#     type       = "disk"
+#     size       = "100Gi"
+#     bus        = "virtio"
+#     boot_order = 1
+#     image      = harvester_image.ubuntu.id
+#     auto_delete = true
+#   }
+#
+#   cloudinit {
+#     user_data = <<-EOT
+#       #cloud-config
+#       hostname: k8s-worker-${count.index}
+#       package_update: true
+#       packages:
+#         - qemu-guest-agent
+#       runcmd:
+#         - systemctl enable --now qemu-guest-agent
+#     EOT
+#   }
+#
+#   depends_on = [harvester_virtualmachine.vyos_router]
+# }
+
+# ══════════════════════════════════════════════════════════════
+# Vault Server — System VLAN (300)
+# ══════════════════════════════════════════════════════════════
+# resource "harvester_virtualmachine" "vault" {
+#   count     = 3
+#   name      = "vault-${count.index}"
+#   namespace = var.namespace
+#
+#   cpu          = 2
+#   memory       = "4Gi"
+#   run_strategy = "RerunOnFailure"
+#   hostname     = "vault-${count.index}"
+#   machine_type = "q35"
+#
+#   ssh_keys = [harvester_ssh_key.vpc_key.id]
+#
+#   tags = {
+#     role     = "vault"
+#     vlan     = "system"
+#     ssh-user = "ubuntu"
+#   }
+#
+#   # Vault lives on the System VLAN
+#   network_interface {
+#     name         = "nic-system"
+#     model        = "virtio"
+#     type         = "bridge"
+#     network_name = harvester_network.vpc_vlans["system"].id
+#     wait_for_lease = true
+#   }
+#
+#   disk {
+#     name       = "rootdisk"
+#     type       = "disk"
+#     size       = "20Gi"
+#     bus        = "virtio"
+#     boot_order = 1
+#     image      = harvester_image.ubuntu.id
+#     auto_delete = true
+#   }
+#
+#   depends_on = [harvester_virtualmachine.vyos_router]
+# }
+
+# ══════════════════════════════════════════════════════════════
+# PostgreSQL — Data VLAN (400)
+# ══════════════════════════════════════════════════════════════
+# resource "harvester_virtualmachine" "postgresql" {
+#   count     = 3
+#   name      = "pg-${count.index}"
+#   namespace = var.namespace
+#
+#   cpu          = 4
+#   memory       = "8Gi"
+#   run_strategy = "RerunOnFailure"
+#   hostname     = "pg-${count.index}"
+#   machine_type = "q35"
+#
+#   ssh_keys = [harvester_ssh_key.vpc_key.id]
+#
+#   tags = {
+#     role     = "postgresql"
+#     vlan     = "data"
+#     ssh-user = "ubuntu"
+#   }
+#
+#   # DB lives on the Data VLAN
+#   network_interface {
+#     name         = "nic-data"
+#     model        = "virtio"
+#     type         = "bridge"
+#     network_name = harvester_network.vpc_vlans["data"].id
+#     wait_for_lease = true
+#   }
+#
+#   disk {
+#     name       = "rootdisk"
+#     type       = "disk"
+#     size       = "20Gi"
+#     bus        = "virtio"
+#     boot_order = 1
+#     image      = harvester_image.ubuntu.id
+#     auto_delete = true
+#   }
+#
+#   # Separate data disk for PostgreSQL
+#   disk {
+#     name        = "pgdata"
+#     type        = "disk"
+#     size        = "100Gi"
+#     bus         = "virtio"
+#     auto_delete = false
+#   }
+#
+#   depends_on = [harvester_virtualmachine.vyos_router]
+# }
+
+# ══════════════════════════════════════════════════════════════
+# Load Balancer — Public VLAN (100)
+# ══════════════════════════════════════════════════════════════
+# resource "harvester_virtualmachine" "loadbalancer" {
+#   count     = 2
+#   name      = "lb-${count.index}"
+#   namespace = var.namespace
+#
+#   cpu          = 2
+#   memory       = "2Gi"
+#   run_strategy = "RerunOnFailure"
+#   hostname     = "lb-${count.index}"
+#   machine_type = "q35"
+#
+#   ssh_keys = [harvester_ssh_key.vpc_key.id]
+#
+#   tags = {
+#     role     = "loadbalancer"
+#     vlan     = "public"
+#     ssh-user = "ubuntu"
+#   }
+#
+#   # LB on the Public VLAN
+#   network_interface {
+#     name         = "nic-public"
+#     model        = "virtio"
+#     type         = "bridge"
+#     network_name = harvester_network.vpc_vlans["public"].id
+#     wait_for_lease = true
+#   }
+#
+#   disk {
+#     name       = "rootdisk"
+#     type       = "disk"
+#     size       = "20Gi"
+#     bus        = "virtio"
+#     boot_order = 1
+#     image      = harvester_image.ubuntu.id
+#     auto_delete = true
+#   }
+#
+#   depends_on = [harvester_virtualmachine.vyos_router]
+# }

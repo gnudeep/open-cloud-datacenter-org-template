@@ -1,0 +1,17 @@
+# Terraform state and sensitive files
+*.tfstate
+*.tfstate.*
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+terraform.tfvars
+infra/terraform.tfvars
+
+# Generated kubeconfigs — never commit
+kubeconfig-*.yaml
+
+# macOS
+.DS_Store
+
+# Archives
+*.zip

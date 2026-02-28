@@ -1,0 +1,137 @@
+# ══════════════════════════════════════════════════════════════
+# Kyverno ClusterPolicy — Enforce VLAN ID allocation per namespace
+#
+# INSTALL KYVERNO FIRST (platform admin, one-time):
+#   helm repo add kyverno https://kyverno.github.io/kyverno/
+#   helm repo update
+#   helm install kyverno kyverno/kyverno \
+#     --namespace kyverno --create-namespace \
+#     --set admissionController.replicas=1
+#
+# APPLY THIS POLICY (platform admin, after kyverno is ready):
+#   kubectl --kubeconfig ~/.kube/harvester.yaml apply -f vlan-policy.yaml
+#
+# HOW IT WORKS:
+#   1. Platform team stamps each sre-* namespace with annotation:
+#        platform/allowed-vlans: "100,200,300,400"   (set by infra/terraform)
+#   2. When any SRE team creates a NetworkAttachmentDefinition (harvester_network),
+#      this policy intercepts the request at the API server.
+#   3. It reads the VLAN ID from spec.config (JSON) and the allowed list from
+#      the namespace annotation.
+#   4. If the VLAN is not in the allowed list → request is DENIED immediately.
+#   5. The team sees a clear error with their actual allowed VLANs.
+#
+# WHAT IT PROTECTS AGAINST:
+#   - Team A accidentally uses Team B's VLAN ID (typo, copy-paste error)
+#   - Team deliberately trying a different VLAN range
+#   - Stale terraform.tfvars from a copied config with wrong values
+# ══════════════════════════════════════════════════════════════
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: enforce-vlan-id-per-namespace
+  annotations:
+    policies.kyverno.io/title: Enforce VLAN ID allocation per SRE namespace
+    policies.kyverno.io/category: Network Security
+    policies.kyverno.io/severity: high
+    policies.kyverno.io/subject: NetworkAttachmentDefinition
+    policies.kyverno.io/minversion: "1.9.0"
+    policies.kyverno.io/description: >-
+      Prevents SRE teams from creating VM networks with VLAN IDs outside their
+      allocated range. Allowed VLANs are stored in the namespace annotation
+      'platform/allowed-vlans' (set by the platform team via infra/ Terraform).
+      This prevents L2 conflicts on the shared vpc-trunk cluster network.
+spec:
+  # Enforce = block the request. Change to Audit to log-only during rollout.
+  validationFailureAction: Enforce
+  background: true
+  rules:
+    # ──────────────────────────────────────────────────────────
+    # Rule 1: VLAN ID must be in the namespace's allowed list
+    # ──────────────────────────────────────────────────────────
+    - name: validate-vlan-id-in-allowlist
+      match:
+        any:
+          - resources:
+              kinds:
+                - NetworkAttachmentDefinition
+              # Only enforce in SRE team namespaces
+              namespaces:
+                - "sre-*"
+              operations:
+                - CREATE
+                - UPDATE
+
+      # Only trigger when the network config actually contains a vlan field
+      preconditions:
+        all:
+          - key: "{{ parse_json(request.object.spec.config).vlan || `0` }}"
+            operator: NotEquals
+            value: "0"
+
+      context:
+        # Read the allowed VLAN list from the namespace annotation
+        - name: allowedVlans
+          apiCall:
+            urlPath: "/api/v1/namespaces/{{ request.object.metadata.namespace }}"
+            jmesPath: "metadata.annotations.\"platform/allowed-vlans\" || ''"
+
+        # Extract the requested VLAN ID from the network spec.config JSON
+        - name: requestedVlan
+          variable:
+            value: "{{ parse_json(request.object.spec.config).vlan }}"
+
+      validate:
+        message: >-
+          NETWORK CREATION DENIED — VLAN {{ requestedVlan }} is not allocated
+          to namespace '{{ request.object.metadata.namespace }}'.
+          Your allowed VLANs are: [{{ allowedVlans }}].
+          Check your terraform.tfvars against the allocation table in AGENT.md.
+          If you believe this is wrong, contact the platform team.
+        deny:
+          conditions:
+            all:
+              # Deny if the requested VLAN ID string is not in the allowed list
+              - key: "{{ to_string(requestedVlan) }}"
+                operator: AnyNotIn
+                value: "{{ split(allowedVlans, ',') }}"
+
+    # ──────────────────────────────────────────────────────────
+    # Rule 2: Namespace must have an allowlist annotation at all
+    # (guards against platform forgetting to annotate a namespace)
+    # ──────────────────────────────────────────────────────────
+    - name: require-vlan-allowlist-annotation
+      match:
+        any:
+          - resources:
+              kinds:
+                - NetworkAttachmentDefinition
+              namespaces:
+                - "sre-*"
+              operations:
+                - CREATE
+
+      preconditions:
+        all:
+          - key: "{{ parse_json(request.object.spec.config).vlan || `0` }}"
+            operator: NotEquals
+            value: "0"
+
+      context:
+        - name: namespaceAnnotation
+          apiCall:
+            urlPath: "/api/v1/namespaces/{{ request.object.metadata.namespace }}"
+            jmesPath: "metadata.annotations.\"platform/allowed-vlans\" || ''"
+
+      validate:
+        message: >-
+          NETWORK CREATION DENIED — Namespace '{{ request.object.metadata.namespace }}'
+          has no 'platform/allowed-vlans' annotation. The platform team must run
+          'terraform apply' in infra/ to annotate this namespace before teams can
+          create VLAN networks. Contact the platform team.
+        deny:
+          conditions:
+            all:
+              - key: "{{ namespaceAnnotation }}"
+                operator: Equals
+                value: ""
