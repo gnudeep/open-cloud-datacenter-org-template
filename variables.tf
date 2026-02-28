@@ -130,3 +130,16 @@ variable "upstream_dns" {
   type        = list(string)
   default     = ["8.8.8.8", "1.1.1.1"]
 }
+
+# ── Workload Stack ──
+variable "rancher_mgmt_cidr" {
+  description = "CIDR of the Rancher management network; VyOS allows port 6443 from here into the PRIVATE VLAN"
+  type        = string
+  default     = "192.168.1.0/24"
+}
+
+variable "kv_store_port" {
+  description = "TCP port for the KV store in the SYSTEM VLAN (6379 = Redis, 8500 = Consul)"
+  type        = number
+  default     = 6379
+}

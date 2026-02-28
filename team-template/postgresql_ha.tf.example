@@ -1,0 +1,188 @@
+# ══════════════════════════════════════════════════════════════
+# PostgreSQL Primary-Standby HA — DATA VLAN
+#
+# This file provisions two VMs in the DATA VLAN:
+#   - postgresql-primary: accepts reads + writes
+#   - postgresql-standby: streaming replication from primary
+#
+# Traffic notes:
+#   - Replication traffic is intra-VLAN (L2), does NOT cross VyOS
+#   - K8s pods in PRIVATE VLAN reach port 5432 via VyOS PRIV-TO-DATA rule
+#   - Vault in SYSTEM VLAN reaches port 5432 via VyOS SYS-TO-DATA rule
+#
+# Usage:
+#   cp postgresql_ha.tf.example postgresql_ha.tf
+#   # Set variables below and run:
+#   terraform init && terraform apply
+# ══════════════════════════════════════════════════════════════
+
+variable "pg_version" {
+  description = "PostgreSQL major version"
+  type        = string
+  default     = "16"
+}
+
+variable "pg_password" {
+  description = "PostgreSQL superuser password (use Vault in production)"
+  type        = string
+  sensitive   = true
+}
+
+variable "pg_replication_password" {
+  description = "PostgreSQL replication user password"
+  type        = string
+  sensitive   = true
+}
+
+# ── Cloud-init: primary node ──
+resource "harvester_cloudinit_secret" "pg_primary" {
+  name      = "postgresql-primary-cloudinit"
+  namespace = var.namespace
+
+  user_data = <<-USERDATA
+    #cloud-config
+    packages:
+      - postgresql-${var.pg_version}
+    write_files:
+      - path: /etc/postgresql/${var.pg_version}/main/pg_hba.conf
+        content: |
+          local   all             postgres                                peer
+          local   all             all                                     md5
+          host    all             all             ${var.vlans.private.cidr}  md5
+          host    all             all             ${var.vlans.system.cidr}   md5
+          host    replication     replicator      ${var.vlans.data.cidr}     md5
+      - path: /etc/postgresql/${var.pg_version}/main/conf.d/replication.conf
+        content: |
+          wal_level = replica
+          max_wal_senders = 5
+          wal_keep_size = 64MB
+          hot_standby = on
+    runcmd:
+      - systemctl enable postgresql
+      - systemctl start postgresql
+      - sudo -u postgres psql -c "ALTER USER postgres PASSWORD '${var.pg_password}';"
+      - sudo -u postgres psql -c "CREATE USER replicator REPLICATION LOGIN PASSWORD '${var.pg_replication_password}';"
+      - systemctl reload postgresql
+    ssh_authorized_keys:
+      - ${var.ssh_public_key}
+  USERDATA
+}
+
+# ── Cloud-init: standby node ──
+resource "harvester_cloudinit_secret" "pg_standby" {
+  name      = "postgresql-standby-cloudinit"
+  namespace = var.namespace
+
+  # Standby cloud-init: pg_basebackup from primary after boot
+  # Primary IP is resolved via DHCP in DATA VLAN — update after primary is up
+  user_data = <<-USERDATA
+    #cloud-config
+    packages:
+      - postgresql-${var.pg_version}
+    runcmd:
+      - systemctl stop postgresql
+      - rm -rf /var/lib/postgresql/${var.pg_version}/main
+      - |
+        sudo -u postgres pg_basebackup \
+          -h ${harvester_virtualmachine.pg_primary.network_interface[0].ip_address} \
+          -U replicator -P -R \
+          -D /var/lib/postgresql/${var.pg_version}/main
+      - systemctl start postgresql
+    ssh_authorized_keys:
+      - ${var.ssh_public_key}
+  USERDATA
+}
+
+# ── Primary VM — DATA VLAN ──
+resource "harvester_virtualmachine" "pg_primary" {
+  name      = "${var.namespace}-pg-primary"
+  namespace = var.namespace
+
+  cpu    = 4
+  memory = "8Gi"
+
+  disk {
+    name        = "rootdisk"
+    type        = "disk"
+    size        = "50Gi"
+    bus         = "virtio"
+    boot_order  = 1
+    image       = "ubuntu-22.04-server-cloudimg-amd64"
+    auto_delete = true
+  }
+
+  disk {
+    name        = "pgdata"
+    type        = "disk"
+    size        = "200Gi"
+    bus         = "virtio"
+    auto_delete = false   # Persist data disk on destroy
+  }
+
+  network_interface {
+    name           = "nic-data"
+    network_name   = harvester_network.vlans["data"].id
+    wait_for_lease = true
+  }
+
+  cloudinit {
+    user_data_secret_name = harvester_cloudinit_secret.pg_primary.name
+  }
+
+  tags = {
+    "role" = "postgresql-primary"
+  }
+}
+
+# ── Standby VM — DATA VLAN ──
+resource "harvester_virtualmachine" "pg_standby" {
+  name      = "${var.namespace}-pg-standby"
+  namespace = var.namespace
+
+  cpu    = 4
+  memory = "8Gi"
+
+  disk {
+    name        = "rootdisk"
+    type        = "disk"
+    size        = "50Gi"
+    bus         = "virtio"
+    boot_order  = 1
+    image       = "ubuntu-22.04-server-cloudimg-amd64"
+    auto_delete = true
+  }
+
+  disk {
+    name        = "pgdata"
+    type        = "disk"
+    size        = "200Gi"
+    bus         = "virtio"
+    auto_delete = false
+  }
+
+  network_interface {
+    name           = "nic-data"
+    network_name   = harvester_network.vlans["data"].id
+    wait_for_lease = true
+  }
+
+  cloudinit {
+    user_data_secret_name = harvester_cloudinit_secret.pg_standby.name
+  }
+
+  tags = {
+    "role" = "postgresql-standby"
+  }
+
+  depends_on = [harvester_virtualmachine.pg_primary]
+}
+
+output "pg_primary_ip" {
+  value       = harvester_virtualmachine.pg_primary.network_interface[0].ip_address
+  description = "PostgreSQL primary IP in DATA VLAN (used by K8s apps and Vault)"
+}
+
+output "pg_standby_ip" {
+  value       = harvester_virtualmachine.pg_standby.network_interface[0].ip_address
+  description = "PostgreSQL standby IP in DATA VLAN (read replica / failover target)"
+}

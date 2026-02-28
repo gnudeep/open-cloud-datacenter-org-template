@@ -23,9 +23,9 @@ locals {
       - set interfaces ethernet eth2 address '${var.vlans.private.gateway}/${split("/", var.vlans.private.cidr)[1]}'
       - set interfaces ethernet eth2 description 'Private - Kubernetes'
       - set interfaces ethernet eth3 address '${var.vlans.system.gateway}/${split("/", var.vlans.system.cidr)[1]}'
-      - set interfaces ethernet eth3 description 'System - Vault, Registry'
+      - set interfaces ethernet eth3 description 'System - KV Store, Vault, Registry'
       - set interfaces ethernet eth4 address '${var.vlans.data.gateway}/${split("/", var.vlans.data.cidr)[1]}'
-      - set interfaces ethernet eth4 description 'Data - Databases'
+      - set interfaces ethernet eth4 description 'Data - PostgreSQL Primary-Standby'
 
       # ── Default route to internet ──
       - set protocols static route 0.0.0.0/0 next-hop '${var.mgmt_network_gateway}'
@@ -152,6 +152,10 @@ locals {
       - set firewall ipv4 name PRIV-TO-SYS rule 30 destination port '5000,443'
       - set firewall ipv4 name PRIV-TO-SYS rule 30 protocol 'tcp'
       - set firewall ipv4 name PRIV-TO-SYS rule 30 description 'Container Registry'
+      - set firewall ipv4 name PRIV-TO-SYS rule 40 action 'accept'
+      - set firewall ipv4 name PRIV-TO-SYS rule 40 destination port '${var.kv_store_port}'
+      - set firewall ipv4 name PRIV-TO-SYS rule 40 protocol 'tcp'
+      - set firewall ipv4 name PRIV-TO-SYS rule 40 description 'KV Store (Redis/Consul)'
       - set firewall zone SYSTEM from PRIVATE firewall name 'PRIV-TO-SYS'
 
       # ── PRIVATE → DATA (K8s to databases) ──
@@ -184,15 +188,26 @@ locals {
       - set firewall ipv4 name SYS-TO-DATA rule 20 description 'Vault PostgreSQL backend'
       - set firewall zone DATA from SYSTEM firewall name 'SYS-TO-DATA'
 
-      # ── Return traffic from WAN to all zones ──
+      # ── Return traffic from WAN → PUBLIC, SYSTEM, DATA ──
       - set firewall ipv4 name WAN-RETURN default-action 'drop'
       - set firewall ipv4 name WAN-RETURN rule 10 action 'accept'
       - set firewall ipv4 name WAN-RETURN rule 10 state 'established'
       - set firewall ipv4 name WAN-RETURN rule 10 state 'related'
       - set firewall zone PUBLIC from WAN firewall name 'WAN-RETURN'
-      - set firewall zone PRIVATE from WAN firewall name 'WAN-RETURN'
       - set firewall zone SYSTEM from WAN firewall name 'WAN-RETURN'
       - set firewall zone DATA from WAN firewall name 'WAN-RETURN'
+
+      # ── WAN → PRIVATE (Rancher API → RKE2 K8s API server) ──
+      - set firewall ipv4 name WAN-TO-PRIV default-action 'drop'
+      - set firewall ipv4 name WAN-TO-PRIV rule 10 action 'accept'
+      - set firewall ipv4 name WAN-TO-PRIV rule 10 state 'established'
+      - set firewall ipv4 name WAN-TO-PRIV rule 10 state 'related'
+      - set firewall ipv4 name WAN-TO-PRIV rule 20 action 'accept'
+      - set firewall ipv4 name WAN-TO-PRIV rule 20 source address '${var.rancher_mgmt_cidr}'
+      - set firewall ipv4 name WAN-TO-PRIV rule 20 destination port '6443'
+      - set firewall ipv4 name WAN-TO-PRIV rule 20 protocol 'tcp'
+      - set firewall ipv4 name WAN-TO-PRIV rule 20 description 'Rancher → RKE2 K8s API'
+      - set firewall zone PRIVATE from WAN firewall name 'WAN-TO-PRIV'
 
       # ── SSH access from mgmt ──
       - set service ssh port '22'

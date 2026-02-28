@@ -671,9 +671,9 @@ terraform apply
 Key rules for workload VMs:
 - Always attach VMs to the correct VLAN network using `harvester_network.vpc_vlans["<zone>"].id`
 - Put **ingress/LB VMs** on the `public` VLAN
-- Put **application VMs** on the `private` VLAN
-- Put **Vault, registry** VMs on the `system` VLAN
-- Put **databases** on the `data` VLAN
+- Put **RKE2 K8s cluster VMs** on the `private` VLAN → see Section 3.3
+- Put **KV Store (Redis/Consul), Vault, registry** VMs on the `system` VLAN → see Section 3.5
+- Put **PostgreSQL VMs** on the `data` VLAN → see Section 3.4
 
 ### 3.2 Modifying VyOS Firewall Rules
 
@@ -709,7 +709,116 @@ terraform apply
 # VyOS VM will restart with the new config (restart_after_update = true)
 ```
 
-### 3.3 Adding a New Team (Platform Admin)
+### 3.3 Deploying the RKE2 Kubernetes Cluster
+
+**Role:** `[SRE]`
+
+RKE2 cluster VMs live in the **PRIVATE VLAN**. Rancher manages the cluster lifecycle.
+
+**Prerequisites:**
+- `terraform.tfvars` has `rancher_url`, `rancher_access_key`, `rancher_secret_key`
+- `rancher_mgmt_cidr` is set to the CIDR from which Rancher reaches port 6443
+- VyOS is already deployed (Phase 2 Part B complete) — the `WAN-TO-PRIV` rule is already in place
+
+```bash
+# From your team Terraform workspace
+cp rke2_cluster.tf.example rke2_cluster.tf
+# Edit rke2_cluster.tf if you need to adjust CPU/memory/count
+
+terraform plan   # verify new VMs and rancher2_cluster_v2 resource
+terraform apply
+```
+
+After apply, the cluster appears in the Rancher UI under your project.
+Download the kubeconfig from Rancher UI → Cluster → Download KubeConfig.
+
+**Verify:**
+```bash
+# Using the kubeconfig downloaded from Rancher
+kubectl --kubeconfig rancher-rke2.yaml get nodes
+kubectl --kubeconfig rancher-rke2.yaml get pods -A
+```
+
+> See AGENT.md Section 14.1 for full traffic path details.
+
+### 3.4 Deploying PostgreSQL Primary-Standby HA
+
+**Role:** `[SRE]`
+
+PostgreSQL VMs live in the **DATA VLAN**. Replication is intra-VLAN (L2) — it does not cross VyOS.
+
+```bash
+cp postgresql_ha.tf.example postgresql_ha.tf
+# Set pg_version, pg_password, pg_replication_password in terraform.tfvars
+# (never commit these — add to .gitignore)
+
+terraform plan
+terraform apply
+```
+
+After apply, note the primary IP from Terraform output:
+```
+pg_primary_ip = "10.N.3.x"
+pg_standby_ip = "10.N.3.y"
+```
+
+**Verify replication:**
+```bash
+ssh ubuntu@10.N.3.x  # via VyOS jump host or bastion in private VLAN
+sudo -u postgres psql -c "SELECT * FROM pg_stat_replication;"
+```
+
+**Connection string from K8s pods:**
+```
+postgresql://postgres:<password>@10.N.3.x:5432/mydb
+```
+
+> For automatic failover, overlay `Patroni` or `pg_auto_failover` on these VMs.
+> See AGENT.md Section 14.2 for traffic matrix details.
+
+### 3.5 Deploying the KV Store (Redis or Consul)
+
+**Role:** `[SRE]`
+
+The KV store VM lives in the **SYSTEM VLAN** alongside Vault and the container registry.
+
+```bash
+cp kv_store.tf.example kv_store.tf
+# Default deploys Redis on port 6379
+# For Consul: set kv_store_port = 8500 in terraform.tfvars
+#   then swap Option A/B comments in kv_store.tf
+
+terraform plan
+terraform apply
+```
+
+After apply, note the KV IP from Terraform output:
+```
+redis_ip = "10.N.2.x"
+```
+
+**Verify from a K8s pod (PRIVATE VLAN):**
+```bash
+# Redis
+redis-cli -h 10.N.2.x -p 6379 ping   # → PONG
+
+# Consul
+curl http://10.N.2.x:8500/v1/status/leader
+```
+
+**Kubernetes Secret for connection:**
+```yaml
+apiVersion: v1
+kind: Secret
+metadata:
+  name: redis-connection
+stringData:
+  REDIS_URL: "redis://10.N.2.x:6379"
+```
+
+> See AGENT.md Section 14.3 for Redis vs Consul guidance.
+
+### 3.6 Adding a New Team (Platform Admin)
 
 **Role:** `[PLATFORM]`
 
@@ -732,7 +841,7 @@ terraform apply
 
 > `terraform apply` on `infra/` is **safe to run** any time — it only adds new resources for new teams. Existing team resources are untouched.
 
-### 3.4 Rotating a Team's Kubeconfig
+### 3.7 Rotating a Team's Kubeconfig
 
 **Role:** `[PLATFORM]`
 
@@ -747,7 +856,7 @@ The kubeconfig token has a 1-year expiry by default. To rotate:
 
 The team updates their local kubeconfig file — no Terraform changes needed.
 
-### 3.5 Updating Team Resource Quotas
+### 3.8 Updating Team Resource Quotas
 
 **Role:** `[PLATFORM]`
 
@@ -758,7 +867,7 @@ cd infra/
 terraform apply
 ```
 
-### 3.6 Running the VLAN Conflict Audit
+### 3.9 Running the VLAN Conflict Audit
 
 **Role:** `[PLATFORM]`
 

@@ -69,3 +69,19 @@ ssh_public_key = "ssh-ed25519 AAAA... replace-with-your-team-key"
 
 # ── DNS ──
 upstream_dns = ["8.8.8.8", "1.1.1.1"]
+
+# ══════════════════════════════════════════════════════════════
+# Workload Stack — Rancher + KV Store
+# ══════════════════════════════════════════════════════════════
+
+# Rancher management server (provided by platform team)
+rancher_url        = "https://rancher.example.com"
+rancher_access_key = "token-xxxxx"    # from Rancher API Keys page
+rancher_secret_key = "xxxxxxxxxxxxxxxx"
+rancher_insecure   = false
+
+# CIDR of the Rancher/management network; VyOS opens port 6443 inbound from here
+rancher_mgmt_cidr = "192.168.1.0/24"
+
+# KV store port in SYSTEM VLAN: 6379 = Redis (default), 8500 = Consul
+kv_store_port = 6379

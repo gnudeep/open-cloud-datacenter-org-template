@@ -64,12 +64,12 @@ vyos_mgmt_ip = 192.168.1.(N*10)
 
 Each `/22` block splits into 4 `/24` zones:
 
-| Zone    | CIDR          | Gateway    | Purpose                        |
-|---------|---------------|------------|-------------------------------|
-| public  | 10.N.0.0/24   | 10.N.0.1   | Load balancers, ingress        |
-| private | 10.N.1.0/24   | 10.N.1.1   | Kubernetes nodes, app pods     |
-| system  | 10.N.2.0/24   | 10.N.2.1   | Vault, container registry      |
-| data    | 10.N.3.0/24   | 10.N.3.1   | PostgreSQL, Redis, Kafka       |
+| Zone    | CIDR          | Gateway    | Purpose                                          |
+|---------|---------------|------------|--------------------------------------------------|
+| public  | 10.N.0.0/24   | 10.N.0.1   | Load balancers, ingress                          |
+| private | 10.N.1.0/24   | 10.N.1.1   | RKE2 K8s cluster nodes (managed by Rancher)      |
+| system  | 10.N.2.0/24   | 10.N.2.1   | KV Store (Redis/Consul), Vault, container registry |
+| data    | 10.N.3.0/24   | 10.N.3.1   | PostgreSQL Primary-Standby, Kafka                |
 
 ---
 
@@ -77,11 +77,15 @@ Each `/22` block splits into 4 `/24` zones:
 
 | Source → Dest | Public | Private | System | Data |
 |---------------|--------|---------|--------|------|
-| **WAN**       | ✅ 80,443 | ❌   | ❌     | ❌   |
-| **Public**    | —      | ✅ NodePort | ❌  | ❌   |
-| **Private**   | ❌     | —       | ✅ Vault,Reg | ✅ PG,Redis,Kafka |
-| **System**    | ❌     | ❌      | —      | ✅ PG |
+| **WAN**       | ✅ 80,443 | ✅ 6443 from `rancher_mgmt_cidr` (Rancher→RKE2) | ❌ | ❌ |
+| **Public**    | —      | ✅ NodePort 30000-32767 | ❌  | ❌   |
+| **Private**   | ❌     | —       | ✅ Vault(8200), Registry(5000/443), KV(`kv_store_port`) | ✅ PG(5432), Kafka(9092) |
+| **System**    | ❌     | ❌      | —      | ✅ PG(5432) — Vault DB backend |
 | **Data**      | ❌     | ❌      | ❌     | —    |
+
+> **WAN→PRIVATE note:** VyOS uses a dedicated `WAN-TO-PRIV` ruleset (not `WAN-RETURN`) so that
+> Rancher can reach the RKE2 API server on port 6443 from the management network.
+> The source is restricted to `var.rancher_mgmt_cidr` — do **not** open this to `0.0.0.0/0`.
 
 > Cross-team traffic: **blocked by default**. Teams are fully isolated at VLAN level.
 
@@ -105,10 +109,13 @@ lk-dc-org-template/
     ├── variables.tf
     ├── networks.tf             ← 4 VLAN-backed VM networks
     ├── images.tf               ← VyOS image + SSH key
-    ├── cloudinit.tf            ← VyOS firewall + routing config
+    ├── cloudinit.tf            ← VyOS firewall + routing config (KV, RKE2, PG rules)
     ├── vyos_router.tf          ← VyOS VM (5 NICs)
     ├── outputs.tf
-    ├── workload_vms.tf.example ← Example workload VMs
+    ├── workload_vms.tf.example      ← Generic workload VM example
+    ├── rke2_cluster.tf.example      ← RKE2 K8s cluster in PRIVATE VLAN
+    ├── postgresql_ha.tf.example     ← PostgreSQL Primary-Standby in DATA VLAN
+    ├── kv_store.tf.example          ← Redis/Consul in SYSTEM VLAN
     └── terraform.tfvars.example
 ```
 
@@ -539,3 +546,89 @@ data_cidr      = 10.N.3.0/24         e.g. N=3 → 10.3.3.0/24
 vyos_mgmt_ip   = 192.168.1.N*10      e.g. N=3 → 192.168.1.30
 namespace      = sre-<teamname>
 ```
+
+---
+
+## 14. Workload Stack Reference
+
+This section describes how to deploy the standard three-tier workload stack inside your VPC.
+
+### 14.1 RKE2 Kubernetes Cluster (PRIVATE VLAN)
+
+**File:** `rke2_cluster.tf.example` → copy to `rke2_cluster.tf`
+
+**How it works:**
+- A `rancher2_cluster_v2` resource registers the cluster with Rancher
+- Control-plane and worker VMs are provisioned in the PRIVATE VLAN (eth2 on VyOS)
+- VyOS `WAN-TO-PRIV` rule allows Rancher to reach the K8s API on port 6443, restricted to `var.rancher_mgmt_cidr`
+- Rancher provides kubeconfig, cluster health, and upgrade management
+
+**Key variables:**
+| Variable | Description | Example |
+|----------|-------------|---------|
+| `rancher_url` | Rancher management server URL | `https://rancher.example.com` |
+| `rancher_access_key` | Rancher API access key | `token-xxxxx` |
+| `rancher_secret_key` | Rancher API secret | (sensitive) |
+| `rancher_mgmt_cidr` | CIDR allowed to reach port 6443 | `192.168.1.0/24` |
+
+**Rancher → RKE2 traffic path:**
+```
+Rancher (mgmt net) → VyOS eth0 → WAN-TO-PRIV ruleset → VyOS eth2 → RKE2 node port 6443
+```
+
+### 14.2 PostgreSQL Primary-Standby HA (DATA VLAN)
+
+**File:** `postgresql_ha.tf.example` → copy to `postgresql_ha.tf`
+
+**How it works:**
+- Two VMs are provisioned in the DATA VLAN (eth4 on VyOS)
+- Primary is configured as a streaming replication source
+- Standby runs `pg_basebackup` from primary on first boot, then stays in hot-standby mode
+- **Replication traffic is intra-VLAN (L2) — it never crosses VyOS**, no extra firewall rule needed
+- K8s apps in PRIVATE VLAN reach port 5432 via the existing `PRIV-TO-DATA` rule
+- Vault in SYSTEM VLAN reaches port 5432 via the `SYS-TO-DATA` rule
+
+**Failover:** PostgreSQL streaming replication does not provide automatic failover.
+Use `pg_auto_failover` or `Patroni` on top of these VMs for production HA.
+
+**Key variables:**
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `pg_version` | PostgreSQL major version | `"16"` |
+| `pg_password` | Superuser password (sensitive) | — |
+| `pg_replication_password` | Replication user password (sensitive) | — |
+
+### 14.3 KV Store — Redis or Consul (SYSTEM VLAN)
+
+**File:** `kv_store.tf.example` → copy to `kv_store.tf`
+
+**How it works:**
+- One VM is provisioned in the SYSTEM VLAN (eth3 on VyOS)
+- VyOS `PRIV-TO-SYS rule 40` allows K8s pods to reach `var.kv_store_port`
+- **Option A: Redis** (default, port 6379) — simple key-value / cache
+- **Option B: Consul** (port 8500) — distributed KV + service mesh + health checks
+
+**Switching between Redis and Consul:**
+1. Set `kv_store_port = 8500` in `terraform.tfvars` for Consul
+2. Comment out the Redis block in `kv_store.tf` and uncomment the Consul block
+3. Run `terraform apply`
+
+**Key variables:**
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `kv_store_port` | TCP port opened by VyOS firewall | `6379` (Redis) |
+
+### 14.4 Deployment Order
+
+Always deploy in this order to satisfy dependencies:
+
+```
+1. platform admin: cd infra/ && terraform apply        ← namespaces, RBAC, VLAN annotations
+2. sre team:       cd my-team-vpc/ && terraform apply  ← VyOS router + 4 VLAN networks
+3. sre team:       terraform apply (rke2_cluster.tf)   ← K8s cluster in PRIVATE VLAN
+4. sre team:       terraform apply (postgresql_ha.tf)  ← PostgreSQL in DATA VLAN
+5. sre team:       terraform apply (kv_store.tf)       ← KV store in SYSTEM VLAN
+```
+
+Steps 3-5 can be in the same `terraform.tf` workspace as step 2; they are separated into `.tf.example`
+files only to keep the template modular. Copy whichever you need, rename, and apply together.

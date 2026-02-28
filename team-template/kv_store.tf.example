@@ -1,0 +1,153 @@
+# ══════════════════════════════════════════════════════════════
+# KV Store (Redis or Consul) — SYSTEM VLAN
+#
+# This file provisions a KV store VM in the SYSTEM VLAN alongside
+# Vault and the container registry.
+#
+# Choose ONE of the two options below:
+#   Option A: Redis (default) — simple key-value cache/store
+#   Option B: Consul           — service mesh, distributed KV, health-check
+#
+# Traffic notes:
+#   - K8s pods in PRIVATE VLAN reach the KV store via VyOS PRIV-TO-SYS rule 40
+#     (port set in var.kv_store_port: 6379 = Redis, 8500 = Consul)
+#   - KV store does NOT need internet access (no NAT rule required beyond existing SYSTEM NAT)
+#
+# Usage:
+#   cp kv_store.tf.example kv_store.tf
+#   # Set kv_store_port in terraform.tfvars (6379 or 8500)
+#   terraform init && terraform apply
+# ══════════════════════════════════════════════════════════════
+
+# ══════════════════════════════════════════════════════════════
+# OPTION A: Redis
+# ══════════════════════════════════════════════════════════════
+
+resource "harvester_cloudinit_secret" "redis" {
+  name      = "redis-cloudinit"
+  namespace = var.namespace
+
+  user_data = <<-USERDATA
+    #cloud-config
+    packages:
+      - redis-server
+    write_files:
+      - path: /etc/redis/redis.conf
+        content: |
+          bind 0.0.0.0
+          protected-mode yes
+          port ${var.kv_store_port}
+          # Require password in production — use Vault for secret injection
+          requirepass ""
+          save 900 1
+          save 300 10
+          save 60 10000
+    runcmd:
+      - systemctl enable redis-server
+      - systemctl restart redis-server
+    ssh_authorized_keys:
+      - ${var.ssh_public_key}
+  USERDATA
+}
+
+resource "harvester_virtualmachine" "redis" {
+  name      = "${var.namespace}-redis"
+  namespace = var.namespace
+
+  cpu    = 2
+  memory = "4Gi"
+
+  disk {
+    name        = "rootdisk"
+    type        = "disk"
+    size        = "20Gi"
+    bus         = "virtio"
+    boot_order  = 1
+    image       = "ubuntu-22.04-server-cloudimg-amd64"
+    auto_delete = true
+  }
+
+  network_interface {
+    name           = "nic-system"
+    network_name   = harvester_network.vlans["system"].id
+    wait_for_lease = true
+  }
+
+  cloudinit {
+    user_data_secret_name = harvester_cloudinit_secret.redis.name
+  }
+
+  tags = {
+    "role" = "kv-store-redis"
+  }
+}
+
+output "redis_ip" {
+  value       = harvester_virtualmachine.redis.network_interface[0].ip_address
+  description = "Redis IP in SYSTEM VLAN — use as KV store endpoint from K8s pods"
+}
+
+# ══════════════════════════════════════════════════════════════
+# OPTION B: Consul (comment out OPTION A above and uncomment this)
+# Remember to set kv_store_port = 8500 in terraform.tfvars
+# ══════════════════════════════════════════════════════════════
+
+# resource "harvester_cloudinit_secret" "consul" {
+#   name      = "consul-cloudinit"
+#   namespace = var.namespace
+#
+#   user_data = <<-USERDATA
+#     #cloud-config
+#     runcmd:
+#       - apt-get update -y
+#       - apt-get install -y gpg curl
+#       - curl -fsSL https://apt.releases.hashicorp.com/gpg | gpg --dearmor -o /usr/share/keyrings/hashicorp-archive-keyring.gpg
+#       - echo "deb [signed-by=/usr/share/keyrings/hashicorp-archive-keyring.gpg] https://apt.releases.hashicorp.com $(lsb_release -cs) main" | tee /etc/apt/sources.list.d/hashicorp.list
+#       - apt-get update -y && apt-get install -y consul
+#       - systemctl enable consul
+#       - systemctl start consul
+#     write_files:
+#       - path: /etc/consul.d/consul.hcl
+#         content: |
+#           datacenter = "${var.namespace}"
+#           data_dir   = "/opt/consul"
+#           bind_addr  = "0.0.0.0"
+#           client_addr = "0.0.0.0"
+#           server     = true
+#           bootstrap_expect = 1
+#           ui_config { enabled = true }
+#           ports { http = 8500 }
+#     ssh_authorized_keys:
+#       - ${var.ssh_public_key}
+#   USERDATA
+# }
+#
+# resource "harvester_virtualmachine" "consul" {
+#   name      = "${var.namespace}-consul"
+#   namespace = var.namespace
+#   cpu       = 2
+#   memory    = "2Gi"
+#   disk {
+#     name        = "rootdisk"
+#     type        = "disk"
+#     size        = "20Gi"
+#     bus         = "virtio"
+#     boot_order  = 1
+#     image       = "ubuntu-22.04-server-cloudimg-amd64"
+#     auto_delete = true
+#   }
+#   network_interface {
+#     name           = "nic-system"
+#     network_name   = harvester_network.vlans["system"].id
+#     wait_for_lease = true
+#   }
+#   cloudinit {
+#     user_data_secret_name = harvester_cloudinit_secret.consul.name
+#   }
+#   tags = { "role" = "kv-store-consul" }
+# }
+#
+# output "consul_ip" {
+#   value       = harvester_virtualmachine.consul.network_interface[0].ip_address
+#   description = "Consul IP in SYSTEM VLAN"
+# }

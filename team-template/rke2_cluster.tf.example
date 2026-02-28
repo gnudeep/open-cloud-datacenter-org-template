@@ -1,0 +1,143 @@
+# ══════════════════════════════════════════════════════════════
+# RKE2 Kubernetes Cluster — PRIVATE VLAN
+#
+# This file provisions:
+#   1. Control-plane VM(s) in the PRIVATE VLAN
+#   2. Worker node VM(s) in the PRIVATE VLAN
+#   3. rancher2_cluster_v2 registration so Rancher manages the cluster
+#
+# Prerequisites:
+#   - team-template/provider.tf must have rancher2 configured
+#   - VyOS WAN-TO-PRIV rule opens port 6443 from var.rancher_mgmt_cidr
+#   - RKE2 images uploaded to your namespace (or use cloud image URL)
+#
+# Usage:
+#   cp rke2_cluster.tf.example rke2_cluster.tf
+#   # Edit variables below, then:
+#   terraform init && terraform apply
+# ══════════════════════════════════════════════════════════════
+
+locals {
+  rke2_cluster_name = "${var.namespace}-rke2"
+}
+
+# ── Rancher managed RKE2 cluster registration ──
+resource "rancher2_cluster_v2" "rke2" {
+  name              = local.rke2_cluster_name
+  kubernetes_version = "v1.29.4+rke2r1"
+
+  rke_config {
+    machine_global_config = <<-EOF
+      cni: "calico"
+      disable-kube-proxy: false
+      etcd-expose-metrics: false
+    EOF
+
+    machine_selector_config {
+      config = {
+        cloud-provider-name = ""
+      }
+    }
+  }
+}
+
+# ── Cloud-init for RKE2 nodes ──
+resource "harvester_cloudinit_secret" "rke2_nodes" {
+  name      = "rke2-node-cloudinit"
+  namespace = var.namespace
+
+  user_data = <<-USERDATA
+    #cloud-config
+    write_files:
+      - path: /etc/rancher/rke2/config.yaml
+        content: |
+          token: ${rancher2_cluster_v2.rke2.cluster_registration_token[0].token}
+          server: ${rancher2_cluster_v2.rke2.cluster_registration_token[0].manifest_url}
+    runcmd:
+      - curl -sfL https://get.rke2.io | INSTALL_RKE2_VERSION="v1.29.4+rke2r1" sh -
+      - systemctl enable rke2-server.service
+      - systemctl start rke2-server.service
+    ssh_authorized_keys:
+      - ${var.ssh_public_key}
+  USERDATA
+}
+
+# ── Control plane VM — PRIVATE VLAN ──
+resource "harvester_virtualmachine" "rke2_control_plane" {
+  count     = 1
+  name      = "${var.namespace}-rke2-cp-${count.index}"
+  namespace = var.namespace
+
+  cpu    = 4
+  memory = "8Gi"
+
+  disk {
+    name        = "rootdisk"
+    type        = "disk"
+    size        = "50Gi"
+    bus         = "virtio"
+    boot_order  = 1
+    image       = "ubuntu-22.04-server-cloudimg-amd64"  # Must exist in your namespace
+    auto_delete = true
+  }
+
+  network_interface {
+    name           = "nic-private"
+    network_name   = harvester_network.vlans["private"].id
+    wait_for_lease = true
+  }
+
+  cloudinit {
+    user_data_secret_name = harvester_cloudinit_secret.rke2_nodes.name
+  }
+
+  tags = {
+    "role"      = "rke2-control-plane"
+    "cluster"   = local.rke2_cluster_name
+  }
+}
+
+# ── Worker node VMs — PRIVATE VLAN ──
+resource "harvester_virtualmachine" "rke2_workers" {
+  count     = 2
+  name      = "${var.namespace}-rke2-worker-${count.index}"
+  namespace = var.namespace
+
+  cpu    = 4
+  memory = "16Gi"
+
+  disk {
+    name        = "rootdisk"
+    type        = "disk"
+    size        = "100Gi"
+    bus         = "virtio"
+    boot_order  = 1
+    image       = "ubuntu-22.04-server-cloudimg-amd64"
+    auto_delete = true
+  }
+
+  network_interface {
+    name           = "nic-private"
+    network_name   = harvester_network.vlans["private"].id
+    wait_for_lease = true
+  }
+
+  cloudinit {
+    user_data_secret_name = harvester_cloudinit_secret.rke2_nodes.name
+  }
+
+  tags = {
+    "role"    = "rke2-worker"
+    "cluster" = local.rke2_cluster_name
+  }
+}
+
+output "rke2_cluster_name" {
+  value       = rancher2_cluster_v2.rke2.name
+  description = "RKE2 cluster name in Rancher"
+}
+
+output "rke2_control_plane_ips" {
+  value       = [for vm in harvester_virtualmachine.rke2_control_plane : vm.network_interface[0].ip_address]
+  description = "PRIVATE VLAN IPs of control plane nodes"
+}

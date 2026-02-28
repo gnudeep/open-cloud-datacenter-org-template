@@ -189,3 +189,40 @@ variable "upstream_dns" {
   type        = list(string)
   default     = ["8.8.8.8", "1.1.1.1"]
 }
+
+# ── Workload Stack ──
+variable "rancher_mgmt_cidr" {
+  description = "CIDR of the Rancher management network; VyOS allows port 6443 from here into the PRIVATE VLAN"
+  type        = string
+  default     = "192.168.1.0/24"
+}
+
+variable "kv_store_port" {
+  description = "TCP port for the KV store in the SYSTEM VLAN (6379 = Redis, 8500 = Consul)"
+  type        = number
+  default     = 6379
+}
+
+# ── Rancher2 Provider (for RKE2 cluster provisioning) ──
+variable "rancher_url" {
+  description = "Rancher management server URL (e.g. https://rancher.example.com)"
+  type        = string
+}
+
+variable "rancher_access_key" {
+  description = "Rancher API access key"
+  type        = string
+  sensitive   = true
+}
+
+variable "rancher_secret_key" {
+  description = "Rancher API secret key"
+  type        = string
+  sensitive   = true
+}
+
+variable "rancher_insecure" {
+  description = "Skip TLS verification for Rancher API (dev/lab only)"
+  type        = bool
+  default     = false
+}
