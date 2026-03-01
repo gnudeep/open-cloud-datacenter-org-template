@@ -76,7 +76,7 @@ variable "sre_teams" {
     VyOS mgmt IP:  192.168.1.<offset*10>
   EOT
   type = map(object({
-    offset = number   # 1-based team index
+    offset = number # 1-based team index
   }))
   default = {
     "sre-alpha" = { offset = 1 }

@@ -172,7 +172,7 @@ resource "harvester_virtualmachine" "pg_primary" {
 
   network_interface {
     name         = "nic-data"
-    network_name = harvester_network.vlans["data"].id
+    network_name = harvester_network.vpc_vlans["data"].id
   }
 
   cloudinit {
@@ -214,7 +214,7 @@ resource "harvester_virtualmachine" "pg_standby" {
 
   network_interface {
     name         = "nic-data"
-    network_name = harvester_network.vlans["data"].id
+    network_name = harvester_network.vpc_vlans["data"].id
   }
 
   cloudinit {

@@ -111,22 +111,22 @@ variable "vlans" {
   # See AGENT.md Section 2 for the VLAN formula and allocation table.
   default = {
     public = {
-      vlan_id = 100         # N=1: 100+(N-1)*10
+      vlan_id = 100 # N=1: 100+(N-1)*10
       cidr    = "10.1.0.0/24"
       gateway = "10.1.0.1"
     }
     private = {
-      vlan_id = 200         # N=1: 200+(N-1)*10
+      vlan_id = 200 # N=1: 200+(N-1)*10
       cidr    = "10.1.1.0/24"
       gateway = "10.1.1.1"
     }
     system = {
-      vlan_id = 300         # N=1: 300+(N-1)*10
+      vlan_id = 300 # N=1: 300+(N-1)*10
       cidr    = "10.1.2.0/24"
       gateway = "10.1.2.1"
     }
     data = {
-      vlan_id = 400         # N=1: 400+(N-1)*10
+      vlan_id = 400 # N=1: 400+(N-1)*10
       cidr    = "10.1.3.0/24"
       gateway = "10.1.3.1"
     }
@@ -231,6 +231,12 @@ variable "kv_store_port" {
   description = "TCP port for the KV store in the SYSTEM VLAN (6379 = Redis, 8500 = Consul)"
   type        = number
   default     = 6379
+}
+
+variable "redis_password" {
+  description = "Redis requirepass authentication password. Must be a strong secret — never leave empty."
+  type        = string
+  sensitive   = true
 }
 
 # ── Rancher2 Provider (for RKE2 cluster provisioning) ──

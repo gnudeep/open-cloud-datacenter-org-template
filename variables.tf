@@ -50,26 +50,28 @@ variable "vlans" {
     cidr    = string
     gateway = string
   }))
+  # Defaults are for sre-alpha (team N=1): 10.1.0.0/22 block
+  # Formula: public=10.N.0.0/24, private=10.N.1.0/24, system=10.N.2.0/24, data=10.N.3.0/24
   default = {
     public = {
       vlan_id = 100
-      cidr    = "10.100.0.0/24"
-      gateway = "10.100.0.1"
+      cidr    = "10.1.0.0/24"
+      gateway = "10.1.0.1"
     }
     private = {
       vlan_id = 200
-      cidr    = "10.200.0.0/24"
-      gateway = "10.200.0.1"
+      cidr    = "10.1.1.0/24"
+      gateway = "10.1.1.1"
     }
     system = {
       vlan_id = 300
-      cidr    = "10.300.0.0/24"
-      gateway = "10.300.0.1"
+      cidr    = "10.1.2.0/24"
+      gateway = "10.1.2.1"
     }
     data = {
       vlan_id = 400
-      cidr    = "10.400.0.0/24"
-      gateway = "10.400.0.1"
+      cidr    = "10.1.3.0/24"
+      gateway = "10.1.3.1"
     }
   }
 }

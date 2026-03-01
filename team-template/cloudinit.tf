@@ -41,9 +41,9 @@ locals {
       - set system static-host-mapping host-name 'postgres.${var.dns_domain}' inet '${cidrhost(var.vlans.data.cidr, 10)}'
       - set system static-host-mapping host-name 'postgres-ro.${var.dns_domain}' inet '${cidrhost(var.vlans.data.cidr, 11)}'
       - set system static-host-mapping host-name 'redis.${var.dns_domain}' inet '${cidrhost(var.vlans.system.cidr, 10)}'
-%{~ for name, ip in var.extra_service_dns }
+%{~for name, ip in var.extra_service_dns}
       - set system static-host-mapping host-name '${name}.${var.dns_domain}' inet '${ip}'
-%{~ endfor }
+%{~endfor}
 
       # ══════════════════════════════════════
       # NAT — All VLANs masquerade to WAN

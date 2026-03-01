@@ -3,8 +3,8 @@
 # ══════════════════════════════════════════════════════════════
 
 output "cluster_network" {
-  description = "VPC cluster network name"
-  value       = harvester_clusternetwork.vpc_trunk.name
+  description = "VPC cluster network name (managed by infra/, referenced here as variable)"
+  value       = var.cluster_network_name
 }
 
 output "vlan_networks" {

@@ -56,6 +56,13 @@ resource "helm_release" "openchoreo_cp" {
           baseUrl: "https://${local.choreo_fqdn}"
           cors:
             origin: "https://${local.choreo_fqdn}"
+      resources:
+        requests:
+          cpu:    "200m"
+          memory: "512Mi"
+        limits:
+          cpu:    "1000m"
+          memory: "1Gi"
 
     # ── kgateway (API gateway) ──
     # Set to NodePort so the Nginx proxy in PUBLIC VLAN can reach it.
@@ -65,6 +72,13 @@ resource "helm_release" "openchoreo_cp" {
         type:          NodePort
         httpNodePort:  ${local.kgateway_http_nodeport}
         httpsNodePort: ${local.kgateway_https_nodeport}
+      resources:
+        requests:
+          cpu:    "100m"
+          memory: "128Mi"
+        limits:
+          cpu:    "500m"
+          memory: "256Mi"
 
     # ── TLS ──
     tls:
@@ -87,24 +101,6 @@ resource "helm_release" "openchoreo_cp" {
           memory: "512Mi"
 
     controllerManager:
-      resources:
-        requests:
-          cpu:    "100m"
-          memory: "128Mi"
-        limits:
-          cpu:    "500m"
-          memory: "256Mi"
-
-    backstage:
-      resources:
-        requests:
-          cpu:    "200m"
-          memory: "512Mi"
-        limits:
-          cpu:    "1000m"
-          memory: "1Gi"
-
-    kgateway:
       resources:
         requests:
           cpu:    "100m"

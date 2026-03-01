@@ -23,7 +23,7 @@ resource "helm_release" "thunder" {
   version    = var.openchoreo_version
   namespace  = var.choreo_system_namespace
   wait       = true
-  timeout    = 600   # Thunder runs DB migrations on first boot
+  timeout    = 600 # Thunder runs DB migrations on first boot
 
   values = [<<-YAML
     # ── Database ──

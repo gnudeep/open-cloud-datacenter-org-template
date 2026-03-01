@@ -29,9 +29,9 @@ resource "kubernetes_annotations" "sre_vlan_allowlist" {
       tostring(300 + (each.value.offset - 1) * 10),
       tostring(400 + (each.value.offset - 1) * 10),
     ])
-    "platform/team-offset"   = tostring(each.value.offset)
-    "platform/subnet-block"  = "10.${each.value.offset}.0.0/22"
-    "platform/vyos-mgmt-ip"  = "192.168.1.${each.value.offset * 10}"
+    "platform/team-offset"  = tostring(each.value.offset)
+    "platform/subnet-block" = "10.${each.value.offset}.0.0/22"
+    "platform/vyos-mgmt-ip" = "192.168.1.${each.value.offset * 10}"
   }
 
   depends_on = [rancher2_namespace.sre_teams]

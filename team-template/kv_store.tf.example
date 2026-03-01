@@ -67,8 +67,7 @@ resource "harvester_cloudinit_secret" "redis" {
           bind 0.0.0.0
           protected-mode yes
           port ${var.kv_store_port}
-          # Require password in production — use Vault for secret injection
-          requirepass ""
+          requirepass "${var.redis_password}"
           save 900 1
           save 300 10
           save 60 10000
@@ -99,7 +98,7 @@ resource "harvester_virtualmachine" "redis" {
 
   network_interface {
     name         = "nic-system"
-    network_name = harvester_network.vlans["system"].id
+    network_name = harvester_network.vpc_vlans["system"].id
   }
 
   cloudinit {
@@ -189,7 +188,7 @@ output "redis_dns_name" {
 #   }
 #   network_interface {
 #     name         = "nic-system"
-#     network_name = harvester_network.vlans["system"].id
+#     network_name = harvester_network.vpc_vlans["system"].id
 #   }
 #   cloudinit {
 #     user_data_secret_name    = harvester_cloudinit_secret.consul.name

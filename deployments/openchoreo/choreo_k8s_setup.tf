@@ -81,11 +81,11 @@ resource "kubernetes_secret_v1" "backstage_db" {
 
   data = {
     "database-url" = local.pg_backstage_url
-    "host"     = "postgres.${var.choreo_app_namespace}.svc.cluster.local"
-    "port"     = "5432"
-    "database" = "backstage"
-    "username" = "backstage"
-    "password" = var.backstage_db_password
+    "host"         = "postgres.${var.choreo_app_namespace}.svc.cluster.local"
+    "port"         = "5432"
+    "database"     = "backstage"
+    "username"     = "backstage"
+    "password"     = var.backstage_db_password
   }
 
   depends_on = [kubernetes_namespace_v1.choreo_system]

@@ -29,7 +29,7 @@ Internet → Basic FW (192.168.1.1) → VyOS Router VM → 4 VLAN Zones
 - Harvester HCI 1.7.1 cluster (3+ nodes)
 - Physical switch with VLAN trunk configured (VLANs 100, 200, 300, 400)
 - Basic firewall/gateway providing internet access
-- Terraform >= 1.0
+- Terraform >= 1.5.0
 
 ## Quick Start
 

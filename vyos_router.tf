@@ -65,12 +65,12 @@ resource "harvester_virtualmachine" "vyos_router" {
 
   # ── Root Disk ──
   disk {
-    name       = "rootdisk"
-    type       = "disk"
-    size       = var.vyos_disk_size
-    bus        = "virtio"
-    boot_order = 1
-    image      = harvester_image.vyos.id
+    name        = "rootdisk"
+    type        = "disk"
+    size        = var.vyos_disk_size
+    bus         = "virtio"
+    boot_order  = 1
+    image       = harvester_image.vyos.id
     auto_delete = true
   }
 

@@ -37,6 +37,12 @@ variable "ssh_public_key" {
   type        = string
 }
 
+variable "ssh_private_key_path" {
+  description = "Absolute (or ~-prefixed) path to the SSH private key used to copy TLS certs to the Nginx VM. Example: ~/.ssh/id_ed25519"
+  type        = string
+  default     = "~/.ssh/id_ed25519"
+}
+
 # ── Ubuntu image ──
 variable "ubuntu_image_name" {
   description = "Display name of the Ubuntu image already uploaded to your Harvester namespace"
@@ -58,8 +64,8 @@ variable "choreo_lb_ip" {
     Leave null to use the default: cidrhost(public.cidr, 10) = 10.N.0.10.
     Must match the IP set in extra_service_dns in your team VPC terraform.tfvars.
   EOT
-  type    = string
-  default = null
+  type        = string
+  default     = null
 }
 
 variable "nginx_vm_cpu" {
@@ -103,8 +109,8 @@ variable "choreo_tls_cert_path" {
         -subj "/CN=*.sre-yourteam.internal" \
         -addext "subjectAltName=DNS:*.sre-yourteam.internal"
   EOT
-  type    = string
-  default = "./tls.crt"
+  type        = string
+  default     = "./tls.crt"
 }
 
 variable "choreo_tls_key_path" {
@@ -133,8 +139,8 @@ variable "choreo_oidc_client_secret" {
     Generate with: openssl rand -hex 32
     Register in Thunder admin UI after Thunder is deployed, then set this value.
   EOT
-  type      = string
-  sensitive = true
+  type        = string
+  sensitive   = true
 }
 
 # ── Chart versions ──

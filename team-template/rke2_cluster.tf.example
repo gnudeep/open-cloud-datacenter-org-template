@@ -83,7 +83,7 @@ resource "harvester_virtualmachine" "rke2_control_plane" {
 
   network_interface {
     name           = "nic-private"
-    network_name   = harvester_network.vlans["private"].id
+    network_name   = harvester_network.vpc_vlans["private"].id
     wait_for_lease = true
   }
 
@@ -118,7 +118,7 @@ resource "harvester_virtualmachine" "rke2_workers" {
 
   network_interface {
     name           = "nic-private"
-    network_name   = harvester_network.vlans["private"].id
+    network_name   = harvester_network.vpc_vlans["private"].id
     wait_for_lease = true
   }
 

@@ -38,7 +38,7 @@ output "thunder_health_check" {
 }
 
 output "next_steps" {
-  value = <<-EOT
+  value       = <<-EOT
 
     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
     OpenChoreo Deployment Complete

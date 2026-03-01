@@ -45,9 +45,9 @@ resource "rancher2_namespace" "sre_teams" {
   description = "Namespace for ${each.key} SRE team"
 
   labels = {
-    "team"           = each.key
-    "managed-by"     = "platform-infra"
-    "team-offset"    = tostring(each.value.offset)
+    "team"        = each.key
+    "managed-by"  = "platform-infra"
+    "team-offset" = tostring(each.value.offset)
   }
 
   # Namespace-level resource quota (subset of project quota)

@@ -183,7 +183,7 @@ resource "null_resource" "copy_nginx_tls" {
       type        = "ssh"
       host        = local.choreo_lb_ip
       user        = "ubuntu"
-      private_key = file("~/.ssh/id_ed25519")   # adjust to your key path
+      private_key = file(pathexpand(var.ssh_private_key_path))
       timeout     = "5m"
     }
   }
@@ -196,7 +196,7 @@ resource "null_resource" "copy_nginx_tls" {
       type        = "ssh"
       host        = local.choreo_lb_ip
       user        = "ubuntu"
-      private_key = file("~/.ssh/id_ed25519")
+      private_key = file(pathexpand(var.ssh_private_key_path))
       timeout     = "5m"
     }
   }
@@ -209,7 +209,7 @@ resource "null_resource" "copy_nginx_tls" {
       type        = "ssh"
       host        = local.choreo_lb_ip
       user        = "ubuntu"
-      private_key = file("~/.ssh/id_ed25519")
+      private_key = file(pathexpand(var.ssh_private_key_path))
       timeout     = "5m"
     }
   }
@@ -226,7 +226,7 @@ resource "null_resource" "copy_nginx_tls" {
       type        = "ssh"
       host        = local.choreo_lb_ip
       user        = "ubuntu"
-      private_key = file("~/.ssh/id_ed25519")
+      private_key = file(pathexpand(var.ssh_private_key_path))
       timeout     = "5m"
     }
   }
