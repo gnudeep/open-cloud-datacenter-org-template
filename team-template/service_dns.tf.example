@@ -23,6 +23,7 @@
 #   - rke2_kubeconfig_path set in terraform.tfvars
 #
 # Usage:
+#   cp rke2_provider.tf.example rke2_provider.tf   ← required once per workspace
 #   cp service_dns.tf.example service_dns.tf
 #   terraform apply
 # ══════════════════════════════════════════════════════════════
@@ -40,10 +41,8 @@ variable "k8s_service_namespace" {
   default     = "default"
 }
 
-provider "kubernetes" {
-  alias       = "rke2"
-  config_path = var.rke2_kubeconfig_path
-}
+# Provider and rke2_kubeconfig_path variable are declared in rke2_provider.tf.
+# Copy rke2_provider.tf.example → rke2_provider.tf before applying.
 
 # ══════════════════════════════════════════════════════════════
 # PostgreSQL — primary (read+write)

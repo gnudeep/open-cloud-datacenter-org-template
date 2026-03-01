@@ -89,3 +89,7 @@ rancher_mgmt_cidr = "192.168.1.0/24"
 
 # KV store port in SYSTEM VLAN: 6379 = Redis (default), 8500 = Consul
 kv_store_port = 6379
+
+# Redis authentication — REQUIRED, must be a strong secret (never leave empty)
+# Use a password manager or: openssl rand -hex 32
+redis_password = "CHANGEME-use-a-strong-secret"

@@ -81,11 +81,11 @@ resource "harvester_cloudinit_secret" "pg_primary" {
     write_files:
       - path: /etc/postgresql/${var.pg_version}/main/pg_hba.conf
         content: |
-          local   all             postgres                                peer
-          local   all             all                                     md5
-          host    all             all             ${var.vlans.private.cidr}  md5
-          host    all             all             ${var.vlans.system.cidr}   md5
-          host    replication     replicator      ${var.vlans.data.cidr}     md5
+          local   all             postgres                                    peer
+          local   all             all                                         scram-sha-256
+          host    all             all             ${var.vlans.private.cidr}   scram-sha-256
+          host    all             all             ${var.vlans.system.cidr}    scram-sha-256
+          host    replication     replicator      ${var.vlans.data.cidr}      scram-sha-256
       - path: /etc/postgresql/${var.pg_version}/main/conf.d/replication.conf
         content: |
           wal_level = replica
@@ -93,6 +93,7 @@ resource "harvester_cloudinit_secret" "pg_primary" {
           wal_keep_size = 64MB
           hot_standby = on
           listen_addresses = '*'
+          password_encryption = scram-sha-256
     runcmd:
       - systemctl enable postgresql
       - systemctl start postgresql
@@ -158,7 +159,7 @@ resource "harvester_virtualmachine" "pg_primary" {
     size        = "50Gi"
     bus         = "virtio"
     boot_order  = 1
-    image       = "ubuntu-22.04-server-cloudimg-amd64"
+    image       = data.harvester_image.ubuntu.id
     auto_delete = true
   }
 
@@ -200,7 +201,7 @@ resource "harvester_virtualmachine" "pg_standby" {
     size        = "50Gi"
     bus         = "virtio"
     boot_order  = 1
-    image       = "ubuntu-22.04-server-cloudimg-amd64"
+    image       = data.harvester_image.ubuntu.id
     auto_delete = true
   }
 

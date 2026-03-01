@@ -2,28 +2,50 @@
 # RKE2 Kubernetes Cluster — PRIVATE VLAN
 #
 # This file provisions:
-#   1. Control-plane VM(s) in the PRIVATE VLAN
-#   2. Worker node VM(s) in the PRIVATE VLAN
+#   1. Control-plane VM(s) in the PRIVATE VLAN   → rke2-server service
+#   2. Worker node VM(s) in the PRIVATE VLAN     → rke2-agent service
 #   3. rancher2_cluster_v2 registration so Rancher manages the cluster
 #
+# Bootstrap flow:
+#   - Control plane boots, installs rke2-server, registers with Rancher
+#   - Workers boot, install rke2-agent, join via the CP node at port 9345
+#   - rke2_cp_ip must be the static IP of the first control-plane node
+#     (see cloud-init network_data below, or set after CP first boot)
+#
 # Prerequisites:
-#   - team-template/provider.tf must have rancher2 configured
+#   - Copy rke2_provider.tf.example → rke2_provider.tf (once per workspace)
 #   - VyOS WAN-TO-PRIV rule opens port 6443 from var.rancher_mgmt_cidr
-#   - RKE2 images uploaded to your namespace (or use cloud image URL)
+#   - Set rke2_kubeconfig_path + rke2_cp_ip in terraform.tfvars
 #
 # Usage:
 #   cp rke2_cluster.tf.example rke2_cluster.tf
-#   # Edit variables below, then:
+#   cp rke2_provider.tf.example rke2_provider.tf
+#   # Edit terraform.tfvars, then:
 #   terraform init && terraform apply
 # ══════════════════════════════════════════════════════════════
 
 locals {
   rke2_cluster_name = "${var.namespace}-rke2"
+  # Control plane static IP — set to .10 in PRIVATE VLAN by convention
+  # Must match rke2_cp_ip variable used by worker cloud-init
+  rke2_cp_ip = cidrhost(var.vlans.private.cidr, 10)
+}
+
+variable "rke2_cp_ip" {
+  description = <<-EOT
+    Static IP for the first RKE2 control-plane node in the PRIVATE VLAN.
+    Workers use this IP to join via port 9345.
+    Default: cidrhost(private.cidr, 10) = 10.N.1.10
+    Set this explicitly after the first control-plane node is up if you
+    want to verify before provisioning workers.
+  EOT
+  type    = string
+  default = null # resolved from locals.rke2_cp_ip when null
 }
 
 # ── Rancher managed RKE2 cluster registration ──
 resource "rancher2_cluster_v2" "rke2" {
-  name              = local.rke2_cluster_name
+  name               = local.rke2_cluster_name
   kubernetes_version = "v1.29.4+rke2r1"
 
   rke_config {
@@ -41,9 +63,49 @@ resource "rancher2_cluster_v2" "rke2" {
   }
 }
 
-# ── Cloud-init for RKE2 nodes ──
-resource "harvester_cloudinit_secret" "rke2_nodes" {
-  name      = "rke2-node-cloudinit"
+# ── Cloud-init: Control plane ──
+# Installs rke2-server and registers with Rancher.
+# Static IP on the PRIVATE VLAN so workers can find it at a known address.
+resource "harvester_cloudinit_secret" "rke2_cp" {
+  name      = "rke2-cp-cloudinit"
+  namespace = var.namespace
+
+  # Static IP — workers join via this address at port 9345
+  network_data = <<-NETDATA
+    version: 2
+    ethernets:
+      enp1s0:
+        addresses:
+          - ${local.rke2_cp_ip}/${split("/", var.vlans.private.cidr)[1]}
+        routes:
+          - to: default
+            via: ${var.vlans.private.gateway}
+        nameservers:
+          addresses:
+            - ${var.vlans.private.gateway}
+          search:
+            - ${var.dns_domain}
+  NETDATA
+
+  user_data = <<-USERDATA
+    #cloud-config
+    write_files:
+      - path: /etc/rancher/rke2/config.yaml
+        content: |
+          token: ${rancher2_cluster_v2.rke2.cluster_registration_token[0].token}
+    runcmd:
+      - curl -sfL https://get.rke2.io | INSTALL_RKE2_VERSION="v1.29.4+rke2r1" sh -
+      - systemctl enable rke2-server.service
+      - systemctl start rke2-server.service
+    ssh_authorized_keys:
+      - ${var.ssh_public_key}
+  USERDATA
+}
+
+# ── Cloud-init: Worker nodes ──
+# Installs rke2-agent and joins the cluster via the control-plane IP:9345.
+resource "harvester_cloudinit_secret" "rke2_worker" {
+  name      = "rke2-worker-cloudinit"
   namespace = var.namespace
 
   user_data = <<-USERDATA
@@ -52,11 +114,11 @@ resource "harvester_cloudinit_secret" "rke2_nodes" {
       - path: /etc/rancher/rke2/config.yaml
         content: |
           token: ${rancher2_cluster_v2.rke2.cluster_registration_token[0].token}
-          server: ${rancher2_cluster_v2.rke2.cluster_registration_token[0].manifest_url}
+          server: https://${coalesce(var.rke2_cp_ip, local.rke2_cp_ip)}:9345
     runcmd:
-      - curl -sfL https://get.rke2.io | INSTALL_RKE2_VERSION="v1.29.4+rke2r1" sh -
-      - systemctl enable rke2-server.service
-      - systemctl start rke2-server.service
+      - curl -sfL https://get.rke2.io | INSTALL_RKE2_VERSION="v1.29.4+rke2r1" INSTALL_RKE2_TYPE="agent" sh -
+      - systemctl enable rke2-agent.service
+      - systemctl start rke2-agent.service
     ssh_authorized_keys:
       - ${var.ssh_public_key}
   USERDATA
@@ -77,7 +139,7 @@ resource "harvester_virtualmachine" "rke2_control_plane" {
     size        = "50Gi"
     bus         = "virtio"
     boot_order  = 1
-    image       = "ubuntu-22.04-server-cloudimg-amd64"  # Must exist in your namespace
+    image       = data.harvester_image.ubuntu.id
     auto_delete = true
   }
 
@@ -88,16 +150,18 @@ resource "harvester_virtualmachine" "rke2_control_plane" {
   }
 
   cloudinit {
-    user_data_secret_name = harvester_cloudinit_secret.rke2_nodes.name
+    user_data_secret_name    = harvester_cloudinit_secret.rke2_cp.name
+    network_data_secret_name = harvester_cloudinit_secret.rke2_cp.name
   }
 
   tags = {
-    "role"      = "rke2-control-plane"
-    "cluster"   = local.rke2_cluster_name
+    "role"    = "rke2-control-plane"
+    "cluster" = local.rke2_cluster_name
   }
 }
 
 # ── Worker node VMs — PRIVATE VLAN ──
+# Workers join only after the control plane is registered in Rancher.
 resource "harvester_virtualmachine" "rke2_workers" {
   count     = 2
   name      = "${var.namespace}-rke2-worker-${count.index}"
@@ -112,7 +176,7 @@ resource "harvester_virtualmachine" "rke2_workers" {
     size        = "100Gi"
     bus         = "virtio"
     boot_order  = 1
-    image       = "ubuntu-22.04-server-cloudimg-amd64"
+    image       = data.harvester_image.ubuntu.id
     auto_delete = true
   }
 
@@ -123,13 +187,15 @@ resource "harvester_virtualmachine" "rke2_workers" {
   }
 
   cloudinit {
-    user_data_secret_name = harvester_cloudinit_secret.rke2_nodes.name
+    user_data_secret_name = harvester_cloudinit_secret.rke2_worker.name
   }
 
   tags = {
     "role"    = "rke2-worker"
     "cluster" = local.rke2_cluster_name
   }
+
+  depends_on = [harvester_virtualmachine.rke2_control_plane]
 }
 
 output "rke2_cluster_name" {
@@ -137,7 +203,7 @@ output "rke2_cluster_name" {
   description = "RKE2 cluster name in Rancher"
 }
 
-output "rke2_control_plane_ips" {
-  value       = [for vm in harvester_virtualmachine.rke2_control_plane : vm.network_interface[0].ip_address]
-  description = "PRIVATE VLAN IPs of control plane nodes"
+output "rke2_control_plane_ip" {
+  value       = local.rke2_cp_ip
+  description = "Static IP of the RKE2 control plane node in PRIVATE VLAN"
 }

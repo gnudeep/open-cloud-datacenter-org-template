@@ -227,6 +227,12 @@ variable "rancher_mgmt_cidr" {
   default     = "192.168.1.0/24"
 }
 
+variable "ubuntu_image_name" {
+  description = "Display name of the Ubuntu cloud image already uploaded to your Harvester namespace. Used by all workload VM examples (RKE2, PostgreSQL, Redis)."
+  type        = string
+  default     = "ubuntu-22.04-server-cloudimg-amd64"
+}
+
 variable "kv_store_port" {
   description = "TCP port for the KV store in the SYSTEM VLAN (6379 = Redis, 8500 = Consul)"
   type        = number

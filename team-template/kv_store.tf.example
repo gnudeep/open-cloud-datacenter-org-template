@@ -92,7 +92,7 @@ resource "harvester_virtualmachine" "redis" {
     size        = "20Gi"
     bus         = "virtio"
     boot_order  = 1
-    image       = "ubuntu-22.04-server-cloudimg-amd64"
+    image       = data.harvester_image.ubuntu.id
     auto_delete = true
   }
 
@@ -145,8 +145,8 @@ output "redis_dns_name" {
 #
 #   user_data = <<-USERDATA
 #     #cloud-config
-#     hostname: redis
-#     fqdn: redis.${var.dns_domain}
+#     hostname: consul
+#     fqdn: consul.${var.dns_domain}
 #     manage_etc_hosts: true
 #     runcmd:
 #       - apt-get update -y
@@ -183,7 +183,7 @@ output "redis_dns_name" {
 #     size        = "20Gi"
 #     bus         = "virtio"
 #     boot_order  = 1
-#     image       = "ubuntu-22.04-server-cloudimg-amd64"
+#     image       = data.harvester_image.ubuntu.id
 #     auto_delete = true
 #   }
 #   network_interface {

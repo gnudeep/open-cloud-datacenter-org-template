@@ -1,0 +1,27 @@
+# ══════════════════════════════════════════════════════════════
+# RKE2 Kubernetes Provider — shared by K8s workload examples
+#
+# Copy this file ONCE when using any of:
+#   coredns_stub_zone.tf.example
+#   service_dns.tf.example
+#
+# If you use both files in the same workspace, this single provider
+# declaration satisfies both. Do NOT copy the provider block from
+# either of those files — this is the single source of truth.
+#
+# Usage:
+#   cp rke2_provider.tf.example rke2_provider.tf
+#   # Set rke2_kubeconfig_path in terraform.tfvars, then:
+#   terraform init && terraform apply
+# ══════════════════════════════════════════════════════════════
+
+variable "rke2_kubeconfig_path" {
+  description = "Path to RKE2 cluster kubeconfig (download from Rancher UI: Cluster → Download KubeConfig)"
+  type        = string
+  default     = "./rke2-kubeconfig.yaml"
+}
+
+provider "kubernetes" {
+  alias       = "rke2"
+  config_path = var.rke2_kubeconfig_path
+}

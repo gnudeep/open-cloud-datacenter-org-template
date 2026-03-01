@@ -22,6 +22,7 @@
 #   - Rancher kubeconfig downloaded to var.rke2_kubeconfig_path
 #
 # USAGE:
+#   cp rke2_provider.tf.example rke2_provider.tf   ← required once per workspace
 #   cp coredns_stub_zone.tf.example coredns_stub_zone.tf
 #   # Set rke2_kubeconfig_path in terraform.tfvars, then:
 #   terraform apply
@@ -31,28 +32,9 @@
 #     -- nslookup pg-primary.sre-yourteam.internal
 # ══════════════════════════════════════════════════════════════
 
-terraform {
-  required_providers {
-    kubernetes = {
-      source  = "hashicorp/kubernetes"
-      version = "~> 2.35"
-      configuration_aliases = [kubernetes.rke2]
-    }
-  }
-}
-
-variable "rke2_kubeconfig_path" {
-  description = "Path to RKE2 cluster kubeconfig (download from Rancher UI: Cluster → Download KubeConfig)"
-  type        = string
-  default     = "./rke2-kubeconfig.yaml"
-}
-
-provider "kubernetes" {
-  alias       = "rke2"
-  config_path = var.rke2_kubeconfig_path
-}
-
 # ── CoreDNS custom stub zone ──
+# Provider and rke2_kubeconfig_path variable are declared in rke2_provider.tf.
+# Copy rke2_provider.tf.example → rke2_provider.tf before applying.
 #
 # RKE2 CoreDNS loads files from the "coredns-custom" ConfigMap at
 # /etc/coredns/custom/ and imports *.server files into the Corefile.

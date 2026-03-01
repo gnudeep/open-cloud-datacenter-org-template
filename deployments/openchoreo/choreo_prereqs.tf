@@ -41,7 +41,7 @@ resource "null_resource" "gateway_api_crds" {
 # kgateway and Thunder both rely on cert-manager-issued certificates.
 resource "helm_release" "cert_manager" {
   name             = "cert-manager"
-  repository       = "oci://quay.io/jetstack"
+  repository       = "oci://ghcr.io/cert-manager/charts"
   chart            = "cert-manager"
   version          = var.cert_manager_version
   namespace        = "cert-manager"

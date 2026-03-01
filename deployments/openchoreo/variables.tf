@@ -183,6 +183,27 @@ variable "kgateway_http_nodeport" {
   default     = 30080
 }
 
+# ── Conditional resource creation ──
+variable "create_postgres_services" {
+  description = <<-EOT
+    Set to false if the postgres and postgres-ro K8s Services already exist in the
+    cluster (e.g. created by service_dns.tf in your team-template workspace).
+    Prevents duplicate-resource errors when both workspaces target the same cluster.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "create_coredns_stub" {
+  description = <<-EOT
+    Set to false if the coredns-custom ConfigMap is already managed by
+    coredns_stub_zone.tf in your team-template workspace.
+    Prevents ownership conflicts — only one workspace should own this ConfigMap.
+  EOT
+  type        = bool
+  default     = true
+}
+
 # ── K8s namespaces ──
 variable "choreo_system_namespace" {
   description = "Kubernetes namespace for OpenChoreo system components"

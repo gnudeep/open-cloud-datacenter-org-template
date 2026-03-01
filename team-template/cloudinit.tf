@@ -190,13 +190,9 @@ locals {
       - set firewall ipv4 name PRIV-TO-DATA rule 20 protocol 'tcp'
       - set firewall ipv4 name PRIV-TO-DATA rule 20 description 'PostgreSQL'
       - set firewall ipv4 name PRIV-TO-DATA rule 30 action 'accept'
-      - set firewall ipv4 name PRIV-TO-DATA rule 30 destination port '6379'
+      - set firewall ipv4 name PRIV-TO-DATA rule 30 destination port '9092'
       - set firewall ipv4 name PRIV-TO-DATA rule 30 protocol 'tcp'
-      - set firewall ipv4 name PRIV-TO-DATA rule 30 description 'Redis'
-      - set firewall ipv4 name PRIV-TO-DATA rule 40 action 'accept'
-      - set firewall ipv4 name PRIV-TO-DATA rule 40 destination port '9092'
-      - set firewall ipv4 name PRIV-TO-DATA rule 40 protocol 'tcp'
-      - set firewall ipv4 name PRIV-TO-DATA rule 40 description 'Kafka'
+      - set firewall ipv4 name PRIV-TO-DATA rule 30 description 'Kafka'
       - set firewall zone DATA from PRIVATE firewall name 'PRIV-TO-DATA'
 
       # ── SYSTEM → DATA (Vault DB backend) ──
@@ -234,6 +230,7 @@ locals {
       # ── SSH access from mgmt ──
       - set service ssh port '22'
       - set service ssh listen-address '${var.vyos_mgmt_ip}'
+      - set service ssh disable-password-authentication
 
     ssh_authorized_keys:
       - ${var.ssh_public_key}
