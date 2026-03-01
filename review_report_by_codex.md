@@ -1,109 +1,83 @@
 # Repository Review Report (Updated)
 
 ## Scope
-Static review of Terraform stacks and supporting scripts/docs in the current repository state.
+Static code review of Terraform stacks, examples, and deployment helpers in the current repository snapshot.
 
 ## Findings (ordered by severity)
 
-### 1. High: Root `terraform.tfvars.example` contains invalid CIDRs for `system` and `data` VLANs
+### 1. High: PostgreSQL example provisions a `pgdata` disk but never mounts/uses it
 - Severity: High
 - Files:
-- `terraform.tfvars.example:41`
-- `terraform.tfvars.example:46`
-- Supporting reference:
-- `variables.tf:53`
+- `team-template/postgresql_ha.tf.example:166`
+- `team-template/postgresql_ha.tf.example:209`
+- `team-template/postgresql_ha.tf.example:136`
 - Problem:
-The example uses `10.300.0.0/24` and `10.400.0.0/24`, which are invalid IPv4 CIDRs.
+Both primary and standby VMs attach a 200Gi `pgdata` disk, but the cloud-init flow never formats/mounts that disk nor points PostgreSQL `data_directory` to it.
 - Impact:
-Users copying this example will fail plan/apply or create inconsistent network assumptions versus the variable formula (`10.N.x.0/24`).
+PostgreSQL continues using the root disk (`/var/lib/postgresql/...`), so the extra storage is effectively unused. This can cause premature root disk exhaustion and outage under write-heavy workloads.
 - Recommendation:
-Update example values to valid per-team subnets (for example `10.1.2.0/24` and `10.1.3.0/24` for `N=1`).
+Initialize and mount the data disk (e.g., `/var/lib/postgresql`) and set ownership/permissions before PostgreSQL starts.
 
-### 2. High: Team examples reference a non-existent Terraform resource name
-- Severity: High
-- Files:
-- `team-template/rke2_cluster.tf.example:86`
-- `team-template/rke2_cluster.tf.example:121`
-- `team-template/kv_store.tf.example:102`
-- `team-template/postgresql_ha.tf.example:175`
-- `team-template/postgresql_ha.tf.example:217`
-- Supporting definition:
-- `team-template/networks.tf:5`
-- Problem:
-Examples reference `harvester_network.vlans[...]`, but the declared resource is `harvester_network.vpc_vlans`.
-- Impact:
-Copying examples into active `.tf` files causes immediate Terraform failures (`Reference to undeclared resource`).
-- Recommendation:
-Replace `harvester_network.vlans` with `harvester_network.vpc_vlans` in all affected example files.
-
-### 3. High: `rke2_cluster.tf.example` bootstrapping logic is inconsistent for control-plane vs worker nodes
-- Severity: High
-- Files:
-- `team-template/rke2_cluster.tf.example:55`
-- `team-template/rke2_cluster.tf.example:57`
-- `team-template/rke2_cluster.tf.example:58`
-- `team-template/rke2_cluster.tf.example:59`
-- Problem:
-A single cloud-init template is reused for both control-plane and worker VMs, sets `server:` to `cluster_registration_token.manifest_url`, and starts `rke2-server` on all nodes.
-- Impact:
-Workers are not configured as agents, and `manifest_url` is not a stable substitute for the RKE2 server endpoint. This is likely to produce failed or incorrect cluster registration/bootstrapping.
-- Recommendation:
-Split cloud-init by role (`rke2-server` for control plane, `rke2-agent` for workers) and use Rancher-supported registration flow/endpoint semantics.
-
-### 4. Medium: OpenChoreo Nginx TLS provisioning hardcodes a local SSH key path
-- Severity: Medium
-- File:
-- `deployments/openchoreo/nginx_lb.tf:186`
-- Problem:
-`private_key = file("~/.ssh/id_ed25519")` assumes a specific key type/path and local filesystem layout.
-- Impact:
-`terraform apply` fails in environments using different key paths, key types, or SSH-agent-only workflows.
-- Recommendation:
-Parameterize SSH auth (key path variable or `agent = true`) and avoid hardcoded home-path assumptions.
-
-### 5. Medium: Redis example ships with authentication effectively disabled
-- Severity: Medium
-- File:
-- `team-template/kv_store.tf.example:71`
-- Problem:
-Redis config sets `requirepass ""`.
-- Impact:
-Any reachable workload can access/modify Redis data without authentication.
-- Recommendation:
-Require non-empty password by default, store it securely, and document rotation/secret-injection flow.
-
-### 6. Medium: CoreDNS customization resource can overwrite shared `coredns-custom` ownership
+### 2. Medium: “HA” PostgreSQL example does not implement automated failover
 - Severity: Medium
 - Files:
-- `deployments/openchoreo/choreo_k8s_services.tf:106`
-- `team-template/coredns_stub_zone.tf.example:60`
+- `team-template/postgresql_ha.tf.example:2`
+- `team-template/postgresql_ha.tf.example:14`
+- `team-template/postgresql_ha.tf.example:15`
 - Problem:
-Both stacks manage the same `kube-system/coredns-custom` ConfigMap directly.
+The file is labeled as HA and creates primary/standby, but it has no failover manager (Patroni/repmgr/Pacemaker), no promotion automation, and DNS remains statically pinned to fixed roles.
 - Impact:
-Applying one stack can overwrite keys managed by another stack/tool, causing DNS regression and drift.
+Primary failure requires manual intervention for promotion and endpoint switching; availability behavior does not match typical HA expectations.
 - Recommendation:
-Use a single owner for `coredns-custom`, or merge existing keys explicitly (or move to a dedicated, centrally-managed DNS customization workflow).
+Either rename/document this as manual failover replication, or add explicit failover orchestration and role-aware service routing.
 
-### 7. Low: Gateway API CRDs are fetched at apply time without integrity pinning
+### 3. Medium: Standby initialization is one-shot and fragile on first boot timing
+- Severity: Medium
+- Files:
+- `team-template/postgresql_ha.tf.example:135`
+- `team-template/postgresql_ha.tf.example:141`
+- `team-template/postgresql_ha.tf.example:230`
+- Problem:
+Standby bootstrapping relies on a single `pg_basebackup` execution during cloud-init. VM dependency only enforces primary resource creation, not Postgres readiness/accepting replication connections.
+- Impact:
+If primary is not fully ready during standby first boot, replica initialization can fail and remain broken until manual repair.
+- Recommendation:
+Add readiness polling/retry logic for primary availability before `pg_basebackup`, and fail clearly with recoverable rerun steps.
+
+### 4. Medium: Secrets are embedded into Terraform-managed values and cloud-init scripts
+- Severity: Medium
+- Files:
+- `team-template/postgresql_ha.tf.example:100`
+- `team-template/postgresql_ha.tf.example:101`
+- `deployments/openchoreo/choreo_k8s_setup.tf:65`
+- `deployments/openchoreo/choreo_k8s_setup.tf:88`
+- Problem:
+Database passwords are passed directly through Terraform resources/user-data.
+- Impact:
+Secrets can appear in Terraform state and operational logs unless backend/state handling is strictly secured.
+- Recommendation:
+Use external secret sources (Vault/SOPS/secret manager), minimize direct secret interpolation in cloud-init, and enforce encrypted remote state with limited access.
+
+### 5. Low: Gateway API CRDs are applied directly from remote URLs at apply time
 - Severity: Low
 - File:
 - `deployments/openchoreo/choreo_prereqs.tf:31`
 - Problem:
-`kubectl apply -f https://...` pulls manifests live during apply based only on version tag.
+`kubectl apply` fetches CRDs from GitHub release URLs during each install/upgrade path.
 - Impact:
-Reduced reproducibility and weaker supply-chain guarantees.
+Less deterministic builds and weaker supply-chain integrity guarantees compared with vendored/pinned artifacts.
 - Recommendation:
-Vendor/pin CRD manifests in-repo (or verify checksums/signatures) and apply from known content.
+Vendor CRD manifests in-repo (or checksum-verify downloaded artifacts) and apply from known content.
 
 ## Open Questions / Assumptions
-- Assumed `team-template/*.example` files are intended to be copied and applied with minimal edits.
-- Assumed `team-template/rke2_cluster.tf.example` is expected to produce a functional Rancher-managed RKE2 cluster as-is after standard variable filling.
+- Assumed `team-template/postgresql_ha.tf.example` is intended for production-like usage, not only lab demonstration.
+- Assumed manual failover behavior is currently undesired for the documented “HA” posture.
 
-## Residual Risks / Gaps
-- This review is static analysis only; no live infrastructure apply was executed.
-- No automated end-to-end validation exists across `infra` -> `team-template` -> `deployments/openchoreo` workflows.
+## Residual Risks / Testing Gaps
+- No automated integration validation covering full flow (`infra` -> `team-template` -> `deployments/openchoreo`).
+- This review is static-only; no live `terraform apply` or runtime failover testing was executed.
 
 ## Suggested Next Actions
-1. Fix blocking template correctness issues first (`terraform.tfvars.example` CIDRs, `harvester_network.vlans` references, RKE2 role bootstrap split).
-2. Harden operational/security defaults (SSH auth parameterization, Redis auth defaults).
-3. Define a single ownership model for `coredns-custom` and pin external CRD artifacts for deterministic applies.
+1. Fix storage correctness first: mount/use `pgdata` for primary and standby before service start.
+2. Decide and document target availability model (manual failover vs automated failover) and align implementation.
+3. Add readiness/retry guards for standby bootstrap and move sensitive credentials to external secret management.

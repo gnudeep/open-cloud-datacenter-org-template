@@ -112,7 +112,55 @@ It is worth noting that some findings in `review_report_by_codex.md` appear to b
 *   **Incorrect Resource Reference:** The report claimed that examples referenced a non-existent `harvester_network.vlans` resource. My review found that all examples correctly reference `harvester_network.vpc_vlans`.
 *   **Hardcoded SSH Key Path:** The report mentioned a hardcoded SSH key path in `deployments/openchoreo/nginx_lb.tf`. My review found that the code now correctly uses a variable, `var.ssh_private_key_path`, for this purpose.
 
-### 6.4. General Recommendations
+### 6.4. VyOS Configuration and Security Hardening
+
+A deeper review of the `team-template/cloudinit.tf` file reveals several opportunities to enhance the VyOS router configuration for better security, manageability, and troubleshooting.
+
+*   **Enable Firewall Logging**:
+    *   **Observation:** The current firewall rules do not log dropped packets. This makes it difficult to troubleshoot connectivity issues and to monitor for potential security events.
+    *   **Recommendation:** Enable logging on the default `drop` rule for each firewall zone. For example:
+        ```
+        - set firewall name WAN-TO-PUBLIC default-action drop
+        - set firewall name WAN-TO-PUBLIC default-log
+        ```
+        This will provide valuable visibility into what traffic is being blocked by the firewall.
+
+*   **Consolidate NAT Rules**:
+    *   **Observation:** There are four separate source NAT (masquerade) rules, one for each VLAN.
+    *   **Recommendation:** Consolidate these into a single NAT rule by using a `source-group`. This will make the configuration cleaner and easier to update if more VLANs are added.
+        ```
+        - set firewall group address-group VLAN_NETWORKS address '${var.vlans.public.cidr}'
+        - set firewall group address-group VLAN_NETWORKS address '${var.vlans.private.cidr}'
+        - set firewall group address-group VLAN_NETWORKS address '${var.vlans.system.cidr}'
+        - set firewall group address-group VLAN_NETWORKS address '${var.vlans.data.cidr}'
+        - set nat source rule 10 outbound-interface name 'eth0'
+        - set nat source rule 10 source group address-group 'VLAN_NETWORKS'
+        - set nat source rule 10 translation address 'masquerade'
+        ```
+
+*   **Explicitly Disable SSH Password Authentication**:
+    *   **Observation:** The `cloudinit.tf` configures SSH key-based authentication but does not explicitly disable password authentication.
+    *   **Impact:** This leaves the VyOS router potentially vulnerable to brute-force password attacks on the management interface.
+    *   **Recommendation:** Add the following command to the `vyos_config_commands` to explicitly disable password authentication for SSH:
+        ```
+        - set service ssh disable-password-authentication
+        ```
+
+*   **Configure NTP for Time Synchronization**:
+    *   **Observation:** The VyOS router is not configured as an NTP client.
+    *   **Impact:** Inaccurate system time can cause issues with logging, certificate validation, and other time-sensitive services.
+    *   **Recommendation:** Configure the router to synchronize its time with public NTP servers:
+        ```
+        - set system ntp server 0.pool.ntp.org
+        - set system ntp server 1.pool.ntp.org
+        ```
+
+*   **Allow Essential ICMP Traffic**:
+    *   **Observation:** The firewall blocks all ICMP traffic by default.
+    *   **Impact:** This prevents basic network troubleshooting tools like `ping` from working between zones, making it harder to diagnose connectivity issues.
+    *   **Recommendation:** Add firewall rules to allow common ICMP types (like `echo-request`, `echo-reply`, and `destination-unreachable`) between the internal zones. This can be done by creating a dedicated `ICMP` ruleset and applying it to the appropriate zone pairings.
+
+### 6.5. General Recommendations
 
 The project is already in a very good state. The following are minor suggestions for potential improvement:
 
