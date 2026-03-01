@@ -11,6 +11,7 @@ Kubernetes prerequisites, application installation, and verification.
 | Guide | Stack | VLANs Used | Guide File |
 |-------|-------|-----------|------------|
 | [OpenChoreo](./openchoreo.md) | OpenChoreo v0.16+ API platform | PUBLIC (LB), PRIVATE (K8s), SYSTEM (KV optional), DATA (PG) | `openchoreo.md` |
+| [OpenChoreo — Service Integrations](./openchoreo-integrations.md) | How every service connects: PostgreSQL, Redis, Registry, external request flow | all four VLANs | `openchoreo-integrations.md` |
 
 ---
 
