@@ -34,6 +34,14 @@ locals {
       - set system host-name 'vyos-vpc-router'
       - set system name-server '${var.upstream_dns[0]}'
 
+      # ── Service DNS — stable FQDNs for well-known infrastructure VMs ──
+      # IPs are in the reserved range (.10-.99); DHCP pool starts at .100.
+      # These records exist from day 1 — before the VMs are even deployed.
+      # When VMs are provisioned with matching static IPs, they resolve immediately.
+      - set system static-host-mapping host-name 'postgres.${var.dns_domain}' inet '${cidrhost(var.vlans.data.cidr, 10)}'
+      - set system static-host-mapping host-name 'postgres-ro.${var.dns_domain}' inet '${cidrhost(var.vlans.data.cidr, 11)}'
+      - set system static-host-mapping host-name 'redis.${var.dns_domain}' inet '${cidrhost(var.vlans.system.cidr, 10)}'
+
       # ══════════════════════════════════════
       # NAT — All VLANs masquerade to WAN
       # ══════════════════════════════════════

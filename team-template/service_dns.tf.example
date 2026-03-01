@@ -1,0 +1,198 @@
+# ══════════════════════════════════════════════════════════════
+# K8s Service DNS — Expose VM services inside the RKE2 cluster
+#
+# This file creates Kubernetes Service + Endpoints objects so that
+# K8s pods can reach PostgreSQL and Redis using cluster-native DNS
+# names, without hardcoding IPs or FQDNs in application manifests.
+#
+# After applying this file, pods can connect via:
+#   postgres.default.svc.cluster.local:5432   → PostgreSQL primary
+#   postgres-ro.default.svc.cluster.local:5432 → PostgreSQL standby (read-only)
+#   redis.default.svc.cluster.local:6379       → Redis
+#
+# How it works:
+#   Service (no selector) + Endpoints → ClusterIP → VM static IP
+#   CoreDNS resolves the Service name to the ClusterIP automatically.
+#   No CNAME indirection — apps get a real A record.
+#
+# Prerequisites:
+#   - VyOS is deployed (static-host-mapping in cloudinit.tf)
+#   - postgresql_ha.tf and kv_store.tf applied (VMs running with static IPs)
+#   - rke2_cluster.tf applied (RKE2 cluster running)
+#   - coredns_stub_zone.tf applied (optional — only needed for FQDN access)
+#   - rke2_kubeconfig_path set in terraform.tfvars
+#
+# Usage:
+#   cp service_dns.tf.example service_dns.tf
+#   terraform apply
+# ══════════════════════════════════════════════════════════════
+
+locals {
+  # Service IPs — must match postgresql_ha.tf.example and kv_store.tf.example
+  svc_pg_primary_ip = cidrhost(var.vlans.data.cidr, 10)
+  svc_pg_standby_ip = cidrhost(var.vlans.data.cidr, 11)
+  svc_kv_ip         = cidrhost(var.vlans.system.cidr, 10)
+}
+
+variable "k8s_service_namespace" {
+  description = "Kubernetes namespace where Service + Endpoints are created. Use the namespace your apps run in."
+  type        = string
+  default     = "default"
+}
+
+provider "kubernetes" {
+  alias       = "rke2"
+  config_path = var.rke2_kubeconfig_path
+}
+
+# ══════════════════════════════════════════════════════════════
+# PostgreSQL — primary (read+write)
+# pods use: postgres.default.svc.cluster.local:5432
+# ══════════════════════════════════════════════════════════════
+
+resource "kubernetes_service_v1" "postgres" {
+  provider = kubernetes.rke2
+
+  metadata {
+    name      = "postgres"
+    namespace = var.k8s_service_namespace
+    labels = {
+      "app.kubernetes.io/managed-by" = "terraform"
+      "app.kubernetes.io/component"  = "database"
+    }
+  }
+
+  spec {
+    # No selector — traffic is routed via the Endpoints object below
+    port {
+      name        = "postgres"
+      port        = 5432
+      target_port = 5432
+      protocol    = "TCP"
+    }
+  }
+}
+
+resource "kubernetes_endpoints_v1" "postgres" {
+  provider = kubernetes.rke2
+
+  metadata {
+    name      = kubernetes_service_v1.postgres.metadata[0].name
+    namespace = var.k8s_service_namespace
+  }
+
+  subset {
+    address {
+      ip = local.svc_pg_primary_ip
+    }
+    port {
+      name     = "postgres"
+      port     = 5432
+      protocol = "TCP"
+    }
+  }
+}
+
+# ══════════════════════════════════════════════════════════════
+# PostgreSQL — standby / read-only replica
+# pods use: postgres-ro.default.svc.cluster.local:5432
+# ══════════════════════════════════════════════════════════════
+
+resource "kubernetes_service_v1" "postgres_ro" {
+  provider = kubernetes.rke2
+
+  metadata {
+    name      = "postgres-ro"
+    namespace = var.k8s_service_namespace
+    labels = {
+      "app.kubernetes.io/managed-by" = "terraform"
+      "app.kubernetes.io/component"  = "database-readonly"
+    }
+  }
+
+  spec {
+    port {
+      name        = "postgres"
+      port        = 5432
+      target_port = 5432
+      protocol    = "TCP"
+    }
+  }
+}
+
+resource "kubernetes_endpoints_v1" "postgres_ro" {
+  provider = kubernetes.rke2
+
+  metadata {
+    name      = kubernetes_service_v1.postgres_ro.metadata[0].name
+    namespace = var.k8s_service_namespace
+  }
+
+  subset {
+    address {
+      ip = local.svc_pg_standby_ip
+    }
+    port {
+      name     = "postgres"
+      port     = 5432
+      protocol = "TCP"
+    }
+  }
+}
+
+# ══════════════════════════════════════════════════════════════
+# Redis / KV Store
+# pods use: redis.default.svc.cluster.local:6379
+# ══════════════════════════════════════════════════════════════
+
+resource "kubernetes_service_v1" "redis" {
+  provider = kubernetes.rke2
+
+  metadata {
+    name      = "redis"
+    namespace = var.k8s_service_namespace
+    labels = {
+      "app.kubernetes.io/managed-by" = "terraform"
+      "app.kubernetes.io/component"  = "kv-store"
+    }
+  }
+
+  spec {
+    port {
+      name        = "redis"
+      port        = var.kv_store_port
+      target_port = var.kv_store_port
+      protocol    = "TCP"
+    }
+  }
+}
+
+resource "kubernetes_endpoints_v1" "redis" {
+  provider = kubernetes.rke2
+
+  metadata {
+    name      = kubernetes_service_v1.redis.metadata[0].name
+    namespace = var.k8s_service_namespace
+  }
+
+  subset {
+    address {
+      ip = local.svc_kv_ip
+    }
+    port {
+      name     = "redis"
+      port     = var.kv_store_port
+      protocol = "TCP"
+    }
+  }
+}
+
+# ── Outputs ──
+output "k8s_service_dns" {
+  value = {
+    postgres    = "postgres.${var.k8s_service_namespace}.svc.cluster.local:5432"
+    postgres_ro = "postgres-ro.${var.k8s_service_namespace}.svc.cluster.local:5432"
+    redis       = "redis.${var.k8s_service_namespace}.svc.cluster.local:${var.kv_store_port}"
+  }
+  description = "Cluster-native DNS names for services — use these in app Deployments/ConfigMaps"
+}

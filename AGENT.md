@@ -117,6 +117,7 @@ lk-dc-org-template/
     ├── postgresql_ha.tf.example     ← PostgreSQL Primary-Standby in DATA VLAN
     ├── kv_store.tf.example          ← Redis/Consul in SYSTEM VLAN
     ├── coredns_stub_zone.tf.example ← CoreDNS stub zone → VyOS internal DNS
+    ├── service_dns.tf.example       ← K8s Service + Endpoints for VM services
     └── terraform.tfvars.example
 ```
 
@@ -732,3 +733,52 @@ kubectl get cm coredns-custom -n kube-system -o yaml
 # Tail CoreDNS logs to see query resolution
 kubectl logs -n kube-system -l k8s-app=kube-dns -f
 ```
+
+### 15.6 Service DNS Names (private names for infrastructure)
+
+Infrastructure VMs use **static IPs** in the reserved range (`.10-.99`). The DHCP pool starts at `.100` so these never conflict. VyOS registers them in dnsmasq via `set system static-host-mapping` — the names exist before the VMs are even deployed.
+
+#### IP reservation layout (per team, zone N)
+
+| Service | Zone | Reserved IP | FQDN |
+|---------|------|-------------|------|
+| PostgreSQL primary | DATA | `10.N.3.10` | `postgres.<team>.internal` |
+| PostgreSQL standby | DATA | `10.N.3.11` | `postgres-ro.<team>.internal` |
+| Redis / KV store  | SYSTEM | `10.N.2.10` | `redis.<team>.internal` |
+| (Vault)           | SYSTEM | `10.N.2.11` | *(add when deploying Vault)* |
+| (Registry)        | SYSTEM | `10.N.2.12` | *(add when deploying Registry)* |
+
+#### How names resolve depending on client
+
+| Client | DNS name | Resolves via |
+|--------|----------|-------------|
+| VM in any VLAN | `postgres.sre-alpha.internal` | VyOS dnsmasq static-host-mapping |
+| K8s pod (FQDN) | `postgres.sre-alpha.internal` | CoreDNS stub zone → VyOS |
+| K8s pod (cluster) | `postgres.default.svc.cluster.local` | CoreDNS → Endpoints object → static IP |
+
+#### Kubernetes cluster-native names
+
+**File:** `service_dns.tf.example` → copy to `service_dns.tf`
+
+Creates `Service + Endpoints` (no selector) objects pointing to the reserved IPs. Pods get proper A records (no CNAME), and the service name is fully under your control:
+
+```yaml
+# Example Deployment environment variables
+env:
+  - name: DATABASE_URL
+    value: "postgresql://appuser:pass@postgres.default.svc.cluster.local:5432/mydb"
+  - name: DATABASE_RO_URL
+    value: "postgresql://appuser:pass@postgres-ro.default.svc.cluster.local:5432/mydb"
+  - name: REDIS_URL
+    value: "redis://redis.default.svc.cluster.local:6379"
+```
+
+#### What to put in each connection string
+
+| Use case | Connection string |
+|----------|------------------|
+| App writes (K8s pod) | `postgres.default.svc.cluster.local:5432` |
+| App reads (K8s pod) | `postgres-ro.default.svc.cluster.local:5432` |
+| App cache (K8s pod) | `redis.default.svc.cluster.local:6379` |
+| Vault DB backend (SYSTEM VM) | `postgres.sre-alpha.internal:5432` |
+| Direct VM access | `postgres.sre-alpha.internal:5432` |

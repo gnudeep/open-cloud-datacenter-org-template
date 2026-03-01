@@ -4,6 +4,13 @@
 # This file provisions a KV store VM in the SYSTEM VLAN alongside
 # Vault and the container registry.
 #
+# Static IP addressing:
+#   kv store = cidrhost(system.cidr, 10)  e.g. 10.N.2.10
+#   (DHCP pool starts at .100 — .10-.99 are reserved for service VMs)
+#
+# DNS name (served by VyOS from day 1):
+#   redis.sre-<team>.internal  → 10.N.2.10
+#
 # Choose ONE of the two options below:
 #   Option A: Redis (default) — simple key-value cache/store
 #   Option B: Consul           — service mesh, distributed KV, health-check
@@ -11,13 +18,17 @@
 # Traffic notes:
 #   - K8s pods in PRIVATE VLAN reach the KV store via VyOS PRIV-TO-SYS rule 40
 #     (port set in var.kv_store_port: 6379 = Redis, 8500 = Consul)
-#   - KV store does NOT need internet access (no NAT rule required beyond existing SYSTEM NAT)
 #
 # Usage:
 #   cp kv_store.tf.example kv_store.tf
 #   # Set kv_store_port in terraform.tfvars (6379 or 8500)
 #   terraform init && terraform apply
 # ══════════════════════════════════════════════════════════════
+
+locals {
+  kv_ip     = cidrhost(var.vlans.system.cidr, 10)
+  kv_prefix = split("/", var.vlans.system.cidr)[1]
+}
 
 # ══════════════════════════════════════════════════════════════
 # OPTION A: Redis
@@ -27,8 +38,27 @@ resource "harvester_cloudinit_secret" "redis" {
   name      = "redis-cloudinit"
   namespace = var.namespace
 
+  # Static IP — matches VyOS static-host-mapping for redis.${dns_domain}
+  # Interface name is enp1s0 for virtio-net on KubeVirt/Harvester.
+  network_data = <<-NETDATA
+    version: 2
+    ethernets:
+      enp1s0:
+        addresses:
+          - ${local.kv_ip}/${local.kv_prefix}
+        gateway4: ${var.vlans.system.gateway}
+        nameservers:
+          addresses:
+            - ${var.vlans.system.gateway}
+          search:
+            - ${var.dns_domain}
+  NETDATA
+
   user_data = <<-USERDATA
     #cloud-config
+    hostname: redis
+    fqdn: redis.${var.dns_domain}
+    manage_etc_hosts: true
     packages:
       - redis-server
     write_files:
@@ -68,23 +98,29 @@ resource "harvester_virtualmachine" "redis" {
   }
 
   network_interface {
-    name           = "nic-system"
-    network_name   = harvester_network.vlans["system"].id
-    wait_for_lease = true
+    name         = "nic-system"
+    network_name = harvester_network.vlans["system"].id
   }
 
   cloudinit {
-    user_data_secret_name = harvester_cloudinit_secret.redis.name
+    user_data_secret_name    = harvester_cloudinit_secret.redis.name
+    network_data_secret_name = harvester_cloudinit_secret.redis.name
   }
 
   tags = {
-    "role" = "kv-store-redis"
+    "role"       = "kv-store-redis"
+    "service-ip" = local.kv_ip
   }
 }
 
 output "redis_ip" {
-  value       = harvester_virtualmachine.redis.network_interface[0].ip_address
-  description = "Redis IP in SYSTEM VLAN — use as KV store endpoint from K8s pods"
+  value       = local.kv_ip
+  description = "Redis static IP — resolves as redis.${var.dns_domain}"
+}
+
+output "redis_dns_name" {
+  value       = "redis.${var.dns_domain}"
+  description = "Redis DNS name — use this in app configuration instead of the IP"
 }
 
 # ══════════════════════════════════════════════════════════════
@@ -96,8 +132,23 @@ output "redis_ip" {
 #   name      = "consul-cloudinit"
 #   namespace = var.namespace
 #
+#   network_data = <<-NETDATA
+#     version: 2
+#     ethernets:
+#       enp1s0:
+#         addresses:
+#           - ${local.kv_ip}/${local.kv_prefix}
+#         gateway4: ${var.vlans.system.gateway}
+#         nameservers:
+#           addresses: [${var.vlans.system.gateway}]
+#           search: [${var.dns_domain}]
+#   NETDATA
+#
 #   user_data = <<-USERDATA
 #     #cloud-config
+#     hostname: redis
+#     fqdn: redis.${var.dns_domain}
+#     manage_etc_hosts: true
 #     runcmd:
 #       - apt-get update -y
 #       - apt-get install -y gpg curl
@@ -137,17 +188,12 @@ output "redis_ip" {
 #     auto_delete = true
 #   }
 #   network_interface {
-#     name           = "nic-system"
-#     network_name   = harvester_network.vlans["system"].id
-#     wait_for_lease = true
+#     name         = "nic-system"
+#     network_name = harvester_network.vlans["system"].id
 #   }
 #   cloudinit {
-#     user_data_secret_name = harvester_cloudinit_secret.consul.name
+#     user_data_secret_name    = harvester_cloudinit_secret.consul.name
+#     network_data_secret_name = harvester_cloudinit_secret.consul.name
 #   }
-#   tags = { "role" = "kv-store-consul" }
-# }
-#
-# output "consul_ip" {
-#   value       = harvester_virtualmachine.consul.network_interface[0].ip_address
-#   description = "Consul IP in SYSTEM VLAN"
+#   tags = { "role" = "kv-store-consul", "service-ip" = local.kv_ip }
 # }

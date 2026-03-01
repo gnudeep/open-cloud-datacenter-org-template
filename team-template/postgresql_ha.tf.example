@@ -5,6 +5,15 @@
 #   - postgresql-primary: accepts reads + writes
 #   - postgresql-standby: streaming replication from primary
 #
+# Static IP addressing:
+#   primary  = cidrhost(data.cidr, 10)  e.g. 10.N.3.10
+#   standby  = cidrhost(data.cidr, 11)  e.g. 10.N.3.11
+#   (DHCP pool starts at .100 — .10-.99 are reserved for service VMs)
+#
+# DNS names (served by VyOS from day 1):
+#   postgres.sre-<team>.internal    → primary IP
+#   postgres-ro.sre-<team>.internal → standby IP
+#
 # Traffic notes:
 #   - Replication traffic is intra-VLAN (L2), does NOT cross VyOS
 #   - K8s pods in PRIVATE VLAN reach port 5432 via VyOS PRIV-TO-DATA rule
@@ -15,6 +24,12 @@
 #   # Set variables below and run:
 #   terraform init && terraform apply
 # ══════════════════════════════════════════════════════════════
+
+locals {
+  pg_primary_ip = cidrhost(var.vlans.data.cidr, 10)
+  pg_standby_ip = cidrhost(var.vlans.data.cidr, 11)
+  pg_prefix     = split("/", var.vlans.data.cidr)[1]
+}
 
 variable "pg_version" {
   description = "PostgreSQL major version"
@@ -39,8 +54,28 @@ resource "harvester_cloudinit_secret" "pg_primary" {
   name      = "postgresql-primary-cloudinit"
   namespace = var.namespace
 
+  # Static IP via cloud-init network data.
+  # Interface name is enp1s0 for virtio-net on KubeVirt/Harvester.
+  # If your image uses a different name, check with: ip link show
+  network_data = <<-NETDATA
+    version: 2
+    ethernets:
+      enp1s0:
+        addresses:
+          - ${local.pg_primary_ip}/${local.pg_prefix}
+        gateway4: ${var.vlans.data.gateway}
+        nameservers:
+          addresses:
+            - ${var.vlans.data.gateway}
+          search:
+            - ${var.dns_domain}
+  NETDATA
+
   user_data = <<-USERDATA
     #cloud-config
+    hostname: postgres
+    fqdn: postgres.${var.dns_domain}
+    manage_etc_hosts: true
     packages:
       - postgresql-${var.pg_version}
     write_files:
@@ -57,6 +92,7 @@ resource "harvester_cloudinit_secret" "pg_primary" {
           max_wal_senders = 5
           wal_keep_size = 64MB
           hot_standby = on
+          listen_addresses = '*'
     runcmd:
       - systemctl enable postgresql
       - systemctl start postgresql
@@ -73,10 +109,25 @@ resource "harvester_cloudinit_secret" "pg_standby" {
   name      = "postgresql-standby-cloudinit"
   namespace = var.namespace
 
-  # Standby cloud-init: pg_basebackup from primary after boot
-  # Primary IP is resolved via DHCP in DATA VLAN — update after primary is up
+  network_data = <<-NETDATA
+    version: 2
+    ethernets:
+      enp1s0:
+        addresses:
+          - ${local.pg_standby_ip}/${local.pg_prefix}
+        gateway4: ${var.vlans.data.gateway}
+        nameservers:
+          addresses:
+            - ${var.vlans.data.gateway}
+          search:
+            - ${var.dns_domain}
+  NETDATA
+
   user_data = <<-USERDATA
     #cloud-config
+    hostname: postgres-ro
+    fqdn: postgres-ro.${var.dns_domain}
+    manage_etc_hosts: true
     packages:
       - postgresql-${var.pg_version}
     runcmd:
@@ -84,7 +135,7 @@ resource "harvester_cloudinit_secret" "pg_standby" {
       - rm -rf /var/lib/postgresql/${var.pg_version}/main
       - |
         sudo -u postgres pg_basebackup \
-          -h ${harvester_virtualmachine.pg_primary.network_interface[0].ip_address} \
+          -h postgres.${var.dns_domain} \
           -U replicator -P -R \
           -D /var/lib/postgresql/${var.pg_version}/main
       - systemctl start postgresql
@@ -116,21 +167,22 @@ resource "harvester_virtualmachine" "pg_primary" {
     type        = "disk"
     size        = "200Gi"
     bus         = "virtio"
-    auto_delete = false   # Persist data disk on destroy
+    auto_delete = false
   }
 
   network_interface {
-    name           = "nic-data"
-    network_name   = harvester_network.vlans["data"].id
-    wait_for_lease = true
+    name         = "nic-data"
+    network_name = harvester_network.vlans["data"].id
   }
 
   cloudinit {
-    user_data_secret_name = harvester_cloudinit_secret.pg_primary.name
+    user_data_secret_name    = harvester_cloudinit_secret.pg_primary.name
+    network_data_secret_name = harvester_cloudinit_secret.pg_primary.name
   }
 
   tags = {
-    "role" = "postgresql-primary"
+    "role"       = "postgresql-primary"
+    "service-ip" = local.pg_primary_ip
   }
 }
 
@@ -161,28 +213,37 @@ resource "harvester_virtualmachine" "pg_standby" {
   }
 
   network_interface {
-    name           = "nic-data"
-    network_name   = harvester_network.vlans["data"].id
-    wait_for_lease = true
+    name         = "nic-data"
+    network_name = harvester_network.vlans["data"].id
   }
 
   cloudinit {
-    user_data_secret_name = harvester_cloudinit_secret.pg_standby.name
+    user_data_secret_name    = harvester_cloudinit_secret.pg_standby.name
+    network_data_secret_name = harvester_cloudinit_secret.pg_standby.name
   }
 
   tags = {
-    "role" = "postgresql-standby"
+    "role"       = "postgresql-standby"
+    "service-ip" = local.pg_standby_ip
   }
 
   depends_on = [harvester_virtualmachine.pg_primary]
 }
 
 output "pg_primary_ip" {
-  value       = harvester_virtualmachine.pg_primary.network_interface[0].ip_address
-  description = "PostgreSQL primary IP in DATA VLAN (used by K8s apps and Vault)"
+  value       = local.pg_primary_ip
+  description = "PostgreSQL primary static IP — resolves as postgres.${var.dns_domain}"
 }
 
 output "pg_standby_ip" {
-  value       = harvester_virtualmachine.pg_standby.network_interface[0].ip_address
-  description = "PostgreSQL standby IP in DATA VLAN (read replica / failover target)"
+  value       = local.pg_standby_ip
+  description = "PostgreSQL standby static IP — resolves as postgres-ro.${var.dns_domain}"
+}
+
+output "pg_dns_names" {
+  value = {
+    primary  = "postgres.${var.dns_domain}"
+    readonly = "postgres-ro.${var.dns_domain}"
+  }
+  description = "DNS names for PostgreSQL — use these in connection strings"
 }

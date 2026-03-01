@@ -826,47 +826,70 @@ DNS is automatically enabled when you deploy the VyOS router — no extra steps 
 
 #### What you get automatically (after `terraform apply`)
 
-VyOS dnsmasq serves your team's internal zone `var.dns_domain` (e.g., `sre-alpha.internal`):
-- Every VLAN's DHCP tells VMs to use VyOS as their nameserver and `sre-alpha.internal` as their search domain
-- VMs that set a hostname in cloud-init become resolvable within seconds of DHCP lease
+VyOS provides two types of DNS records automatically:
+
+**1. DHCP hostname records** — any VM that sets `hostname:` in cloud-init registers itself:
+```bash
+# From any VM in any of your 4 VLANs
+dig pg-primary.sre-alpha.internal      # DHCP-registered hostname
+```
+
+**2. Static service records** — well-known infrastructure services get stable FQDNs before VMs exist:
+```
+postgres.sre-alpha.internal    → 10.N.3.10  (PostgreSQL primary)
+postgres-ro.sre-alpha.internal → 10.N.3.11  (PostgreSQL standby)
+redis.sre-alpha.internal       → 10.N.2.10  (Redis / KV store)
+```
+These IPs are in the reserved range (`.10-.99`). The DHCP pool starts at `.100` — no conflicts.
+
+#### Deploying service VMs with static IPs
+
+The `postgresql_ha.tf.example` and `kv_store.tf.example` now configure static IPs that match the VyOS records. Once applied, the DNS names resolve immediately:
 
 ```bash
-# From any VM in any of your 4 VLANs — should work immediately
-dig pg-primary.sre-alpha.internal
-nslookup redis.sre-alpha.internal
+# From any VM in any VLAN
+nslookup postgres.sre-alpha.internal   # → 10.N.3.10
+nslookup redis.sre-alpha.internal      # → 10.N.2.10
 ```
 
-**Important:** Your workload VMs must set a hostname in cloud-init:
-```yaml
-#cloud-config
-hostname: pg-primary
-fqdn: pg-primary.sre-alpha.internal
-manage_etc_hosts: true
-```
+#### Step 1 — CoreDNS stub zone (K8s pods → internal FQDNs)
 
-#### Wiring K8s pods to internal DNS (CoreDNS stub zone)
-
-K8s pods use CoreDNS for DNS, not VyOS directly. Apply the stub zone so pods can resolve internal VM FQDNs:
+K8s pods use CoreDNS for DNS. Apply the stub zone so pods can resolve internal VM FQDNs:
 
 ```bash
 cp coredns_stub_zone.tf.example coredns_stub_zone.tf
-# Set rke2_kubeconfig_path in terraform.tfvars
 terraform apply
 ```
 
-Verify (CoreDNS hot-reloads within 30 seconds — no restart needed):
+Verify (CoreDNS hot-reloads within 30 seconds):
 ```bash
 kubectl run dns-test --image=busybox:1.36 --restart=Never -it --rm -- \
-  nslookup pg-primary.sre-alpha.internal
-# Expected: Address: 10.N.3.x
-
-# Your app deployments can now use FQDNs:
-# postgresql://pg-primary.sre-alpha.internal:5432/mydb
-# redis://redis.sre-alpha.internal:6379
-# http://vault.sre-alpha.internal:8200
+  nslookup postgres.sre-alpha.internal
+# Expected: Address: 10.N.3.10
 ```
 
-> See AGENT.md Section 15 for full DNS architecture and troubleshooting.
+#### Step 2 — K8s Service + Endpoints (cluster-native service names)
+
+For the cleanest K8s integration, also create Service objects pointing to the static IPs. This gives pods short names without the team domain:
+
+```bash
+cp service_dns.tf.example service_dns.tf
+# Set k8s_service_namespace in terraform.tfvars (default: "default")
+terraform apply
+```
+
+Pods can then use either form:
+
+| DNS name | Resolves to | Where it works |
+|----------|------------|----------------|
+| `postgres.default.svc.cluster.local:5432` | ClusterIP → 10.N.3.10 | K8s pods only |
+| `postgres.sre-alpha.internal:5432` | 10.N.3.10 directly | All VMs + pods |
+| `postgres-ro.default.svc.cluster.local:5432` | ClusterIP → 10.N.3.11 | K8s pods only |
+| `redis.default.svc.cluster.local:6379` | ClusterIP → 10.N.2.10 | K8s pods only |
+
+**Recommended: use `svc.cluster.local` names in Deployments** — they are portable and don't encode the team domain.
+
+> See AGENT.md Section 15.6 for IP reservation table and connection string reference.
 
 ### 3.7 Adding a New Team (Platform Admin)
 
