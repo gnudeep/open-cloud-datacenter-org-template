@@ -1,0 +1,105 @@
+# ══════════════════════════════════════════════════════════════
+# deployments/openchoreo/terraform.tfvars
+#
+# Copy this file to terraform.tfvars and fill in all values.
+# Values marked ← REQUIRED have no default and must be set.
+#
+# ALSO needed in your team VPC terraform.tfvars (different workspace):
+#   extra_service_dns = {
+#     "choreo"     = "10.N.0.10"
+#     "choreo-api" = "10.N.0.10"
+#     "choreo-id"  = "10.N.0.10"
+#   }
+# Run terraform apply in the team VPC after adding those entries.
+# ══════════════════════════════════════════════════════════════
+
+# ── Harvester connection (same as your team VPC) ──
+harvester_kubeconfig = "../kubeconfig-sre-yourteam.yaml"   # ← REQUIRED
+
+# ── Your team namespace ──
+namespace = "sre-yourteam"                                  # ← REQUIRED
+
+# ── VLAN definitions — copy from your team VPC terraform.tfvars ──
+# Replace N with your team offset (sre-alpha = 1, sre-beta = 2, ...)
+vlans = {
+  public = {
+    vlan_id = 110            # 100 + (N-1)*10
+    cidr    = "10.2.0.0/24"
+    gateway = "10.2.0.1"
+  }
+  private = {
+    vlan_id = 210
+    cidr    = "10.2.1.0/24"
+    gateway = "10.2.1.1"
+  }
+  system = {
+    vlan_id = 310
+    cidr    = "10.2.2.0/24"
+    gateway = "10.2.2.1"
+  }
+  data = {
+    vlan_id = 410
+    cidr    = "10.2.3.0/24"
+    gateway = "10.2.3.1"
+  }
+}
+
+# ── DNS ──
+dns_domain = "sre-yourteam.internal"                        # ← REQUIRED
+
+# ── SSH key (placed on Nginx proxy VM) ──
+ssh_public_key = "ssh-ed25519 AAAA... your-team-key"        # ← REQUIRED
+
+# ── Ubuntu image — display name as it appears in Harvester ──
+ubuntu_image_name = "ubuntu-22.04-server-cloudimg-amd64"
+
+# ── RKE2 kubeconfig ──
+# Download from Rancher UI: Cluster → (your cluster) → Download KubeConfig
+rke2_kubeconfig_path = "./rke2-kubeconfig.yaml"             # ← REQUIRED
+
+# ── Nginx LB proxy IP ──
+# Leave null to use the default: 10.N.0.10 (cidrhost of public CIDR, offset 10)
+# Must match the extra_service_dns entries in your team VPC terraform.tfvars
+choreo_lb_ip = null
+
+# ── DNS hostnames for OpenChoreo endpoints ──
+choreo_hostname     = "choreo"
+choreo_api_hostname = "choreo-api"
+choreo_id_hostname  = "choreo-id"
+
+# ── TLS certificate paths ──
+# Generate a self-signed wildcard cert:
+#   openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+#     -keyout tls.key -out tls.crt \
+#     -subj "/CN=*.sre-yourteam.internal" \
+#     -addext "subjectAltName=DNS:*.sre-yourteam.internal,DNS:sre-yourteam.internal"
+choreo_tls_cert_path = "./tls.crt"
+choreo_tls_key_path  = "./tls.key"
+
+# ── Database passwords ──
+# Set these AFTER creating the databases in PostgreSQL (see openchoreo.md Step 4).
+thunder_db_password   = "CHANGE_thunder_password"           # ← REQUIRED
+backstage_db_password = "CHANGE_backstage_password"         # ← REQUIRED
+
+# ── OIDC client secret ──
+# Set AFTER Thunder is installed and you have created the OIDC client in Thunder admin UI.
+# Leave as empty string on first apply (Thunder will be installed; then update and re-apply).
+choreo_oidc_client_secret = ""                              # ← Set after Thunder install
+
+# ── kgateway NodePorts (must be in 30000-32767 range) ──
+kgateway_https_nodeport = 30443
+kgateway_http_nodeport  = 30080
+
+# ── Chart versions ──
+cert_manager_version     = "v1.14.5"
+external_secrets_version = "0.9.17"
+gateway_api_version      = "v1.2.0"
+openchoreo_version       = "0.16.0"
+
+# ── Namespaces ──
+choreo_system_namespace = "choreo-system"
+choreo_app_namespace    = "default"
+
+# ── Nginx VM sizing ──
+nginx_vm_cpu    = 1
+nginx_vm_memory = "1Gi"
