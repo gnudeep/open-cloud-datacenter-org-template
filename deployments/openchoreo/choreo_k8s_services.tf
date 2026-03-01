@@ -19,12 +19,6 @@
 # Remove this file if service_dns.tf is already applied in your team workspace.
 # ══════════════════════════════════════════════════════════════
 
-locals {
-  # Compute service IPs from VLAN CIDRs — must match postgresql_ha.tf
-  svc_pg_primary_ip = cidrhost(var.vlans.data.cidr, 10)
-  svc_pg_standby_ip = cidrhost(var.vlans.data.cidr, 11)
-}
-
 # ── PostgreSQL primary — read/write ──
 resource "kubernetes_service_v1" "postgres" {
   metadata {
@@ -55,7 +49,7 @@ resource "kubernetes_endpoints_v1" "postgres" {
 
   subset {
     address {
-      ip = local.svc_pg_primary_ip
+      ip = local.pg_primary_ip
     }
     port {
       name     = "postgres"
@@ -95,7 +89,7 @@ resource "kubernetes_endpoints_v1" "postgres_ro" {
 
   subset {
     address {
-      ip = local.svc_pg_standby_ip
+      ip = local.pg_standby_ip
     }
     port {
       name     = "postgres"
