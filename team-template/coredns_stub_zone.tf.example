@@ -1,0 +1,90 @@
+# ══════════════════════════════════════════════════════════════
+# CoreDNS Stub Zone — K8s pods → internal VM hostnames
+#
+# This file patches the RKE2 CoreDNS with a stub zone so that
+# K8s pods can resolve internal VM hostnames like:
+#
+#   pg-primary.sre-alpha.internal  → 10.1.3.x  (PostgreSQL)
+#   redis.sre-alpha.internal       → 10.1.2.x  (KV Store)
+#   vault.sre-alpha.internal       → 10.1.2.y  (Vault)
+#
+# HOW IT WORKS:
+#   - VyOS dnsmasq is the authoritative DNS server for var.dns_domain
+#   - VMs register their hostnames via DHCP (set hostname in cloud-init)
+#   - This file creates a ConfigMap named "coredns-custom" in kube-system
+#   - RKE2 CoreDNS automatically imports /etc/coredns/custom/*.server files
+#     from this ConfigMap (built-in RKE2 CoreDNS feature)
+#   - Queries for *.sre-<team>.internal are forwarded to VyOS PRIVATE gateway
+#
+# PREREQUISITES:
+#   - VyOS is deployed with dns_domain configured (main terraform apply done)
+#   - RKE2 cluster is running (rke2_cluster.tf applied)
+#   - Rancher kubeconfig downloaded to var.rke2_kubeconfig_path
+#
+# USAGE:
+#   cp coredns_stub_zone.tf.example coredns_stub_zone.tf
+#   # Set rke2_kubeconfig_path in terraform.tfvars, then:
+#   terraform apply
+#
+# VERIFY (from a K8s pod):
+#   kubectl run dns-test --image=busybox --restart=Never -it --rm \
+#     -- nslookup pg-primary.sre-yourteam.internal
+# ══════════════════════════════════════════════════════════════
+
+terraform {
+  required_providers {
+    kubernetes = {
+      source  = "hashicorp/kubernetes"
+      version = "~> 2.35"
+      configuration_aliases = [kubernetes.rke2]
+    }
+  }
+}
+
+variable "rke2_kubeconfig_path" {
+  description = "Path to RKE2 cluster kubeconfig (download from Rancher UI: Cluster → Download KubeConfig)"
+  type        = string
+  default     = "./rke2-kubeconfig.yaml"
+}
+
+provider "kubernetes" {
+  alias       = "rke2"
+  config_path = var.rke2_kubeconfig_path
+}
+
+# ── CoreDNS custom stub zone ──
+#
+# RKE2 CoreDNS loads files from the "coredns-custom" ConfigMap at
+# /etc/coredns/custom/ and imports *.server files into the Corefile.
+# CoreDNS hot-reloads the config when the ConfigMap changes (reload plugin).
+resource "kubernetes_config_map_v1" "coredns_stub_zone" {
+  provider = kubernetes.rke2
+
+  metadata {
+    name      = "coredns-custom"
+    namespace = "kube-system"
+    labels = {
+      "app.kubernetes.io/name"       = "coredns"
+      "app.kubernetes.io/managed-by" = "terraform"
+    }
+  }
+
+  data = {
+    # File name must end in .server — CoreDNS imports it as a new server block
+    "${replace(var.dns_domain, ".", "-")}.server" = <<-EOF
+      # Internal stub zone: forward ${var.dns_domain} queries to VyOS
+      # VyOS dnsmasq resolves VM hostnames from DHCP lease registrations.
+      ${var.dns_domain}:53 {
+        forward . ${var.vlans.private.gateway}
+        cache 30
+        errors
+        log
+      }
+    EOF
+  }
+}
+
+output "coredns_stub_zone_status" {
+  value       = "Stub zone for '${var.dns_domain}' → ${var.vlans.private.gateway} created in CoreDNS"
+  description = "CoreDNS will hot-reload within 30s. Test with: kubectl run dns-test --image=busybox --restart=Never -it --rm -- nslookup pg-primary.${var.dns_domain}"
+}

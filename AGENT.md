@@ -116,6 +116,7 @@ lk-dc-org-template/
     ├── rke2_cluster.tf.example      ← RKE2 K8s cluster in PRIVATE VLAN
     ├── postgresql_ha.tf.example     ← PostgreSQL Primary-Standby in DATA VLAN
     ├── kv_store.tf.example          ← Redis/Consul in SYSTEM VLAN
+    ├── coredns_stub_zone.tf.example ← CoreDNS stub zone → VyOS internal DNS
     └── terraform.tfvars.example
 ```
 
@@ -632,3 +633,102 @@ Always deploy in this order to satisfy dependencies:
 
 Steps 3-5 can be in the same `terraform.tf` workspace as step 2; they are separated into `.tf.example`
 files only to keep the template modular. Copy whichever you need, rename, and apply together.
+
+---
+
+## 15. Internal DNS Architecture
+
+Each team's VPC has a two-layer DNS design that provides hostname-based service discovery with **zero extra VMs**.
+
+### 15.1 Layer 1 — VyOS dnsmasq (authoritative for `<team>.internal`)
+
+VyOS runs **dnsmasq** as its DNS forwarder. Three config additions (in `cloudinit.tf`) enable internal DNS:
+
+| VyOS command | Effect |
+|-------------|--------|
+| `local=/<domain>/` | dnsmasq answers this zone locally — never forwards to upstream |
+| `expand-hosts` | Appends the domain to every DHCP hostname: `pg-primary` → `pg-primary.<domain>` |
+| `domain=<domain>` | Default domain for unqualified names |
+| `domain-name` on each DHCP subnet | DHCP clients learn their search domain |
+
+**Result:** Any VM that sets its hostname in cloud-init becomes automatically resolvable:
+```
+pg-primary.sre-alpha.internal  →  DHCP lease IP  (auto-registered on DHCP)
+redis.sre-alpha.internal       →  DHCP lease IP
+vault.sre-alpha.internal       →  DHCP lease IP
+```
+No static records. No DNS VM. DHCP renewal updates the record automatically.
+
+**Variable:** `dns_domain` — set per team in `terraform.tfvars` (e.g., `"sre-alpha.internal"`).
+
+### 15.2 Layer 2 — CoreDNS stub zone (K8s pods → VM hostnames)
+
+RKE2 ships CoreDNS for in-cluster DNS (`*.cluster.local`). A custom ConfigMap extends it
+to resolve internal VM FQDNs by forwarding `<team>.internal` queries to VyOS:
+
+**File:** `coredns_stub_zone.tf.example` → copy to `coredns_stub_zone.tf`
+
+```
+K8s pod: nslookup pg-primary.sre-alpha.internal
+  → CoreDNS (stub zone for sre-alpha.internal)
+  → forward to VyOS PRIVATE gateway (10.N.1.1:53)
+  → dnsmasq (local zone, DHCP lease lookup)
+  → 10.N.3.x  ✓
+```
+
+RKE2 CoreDNS automatically imports files from a `coredns-custom` ConfigMap in `kube-system`
+(mounted at `/etc/coredns/custom/*.server`). No restart required — CoreDNS hot-reloads.
+
+**Connection strings using FQDNs (no hardcoded IPs):**
+```
+postgresql://pg-primary.sre-alpha.internal:5432/mydb
+redis://redis.sre-alpha.internal:6379
+http://vault.sre-alpha.internal:8200
+```
+
+### 15.3 DNS traffic summary
+
+| Query source | Zone | Path | Resolver |
+|-------------|------|------|----------|
+| Any VM | `*.sre-<team>.internal` | DHCP nameserver → VyOS | dnsmasq (local) |
+| Any VM | `*.example.com` | DHCP nameserver → VyOS | dnsmasq → upstream 8.8.8.8 |
+| K8s pod | `*.cluster.local` | CoreDNS | CoreDNS (kubernetes plugin) |
+| K8s pod | `*.sre-<team>.internal` | CoreDNS → VyOS PRIVATE GW | dnsmasq (local) |
+| K8s pod | `*.example.com` | CoreDNS | CoreDNS → upstream |
+
+### 15.4 VM hostname requirements
+
+For DNS to work automatically, every workload VM **must** set its hostname in cloud-init:
+
+```yaml
+#cloud-config
+hostname: pg-primary        # → resolves as pg-primary.sre-alpha.internal
+fqdn: pg-primary.sre-alpha.internal
+manage_etc_hosts: true
+```
+
+The example files (`postgresql_ha.tf.example`, `kv_store.tf.example`, `rke2_cluster.tf.example`)
+already set the hostname via the VM `name` field. Confirm cloud-init in each file sets `hostname`.
+
+### 15.5 Troubleshooting DNS
+
+```bash
+# On VyOS — list all active DHCP leases (auto-registered in DNS)
+show dhcp server leases
+
+# On VyOS — test local DNS resolution
+dig @127.0.0.1 pg-primary.sre-alpha.internal
+
+# On any VM — test via VyOS gateway
+dig @10.N.1.1 redis.sre-alpha.internal
+
+# From K8s pod — test stub zone
+kubectl run dns-test --image=busybox --restart=Never -it --rm -- \
+  nslookup pg-primary.sre-alpha.internal
+
+# Check CoreDNS custom ConfigMap is loaded
+kubectl get cm coredns-custom -n kube-system -o yaml
+
+# Tail CoreDNS logs to see query resolution
+kubectl logs -n kube-system -l k8s-app=kube-dns -f
+```

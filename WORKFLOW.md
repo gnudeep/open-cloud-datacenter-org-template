@@ -818,7 +818,57 @@ stringData:
 
 > See AGENT.md Section 14.3 for Redis vs Consul guidance.
 
-### 3.6 Adding a New Team (Platform Admin)
+### 3.6 Enabling Internal DNS
+
+**Role:** `[SRE]`
+
+DNS is automatically enabled when you deploy the VyOS router — no extra steps needed for VM-level name resolution. This section explains what's configured and how to wire up K8s pods.
+
+#### What you get automatically (after `terraform apply`)
+
+VyOS dnsmasq serves your team's internal zone `var.dns_domain` (e.g., `sre-alpha.internal`):
+- Every VLAN's DHCP tells VMs to use VyOS as their nameserver and `sre-alpha.internal` as their search domain
+- VMs that set a hostname in cloud-init become resolvable within seconds of DHCP lease
+
+```bash
+# From any VM in any of your 4 VLANs — should work immediately
+dig pg-primary.sre-alpha.internal
+nslookup redis.sre-alpha.internal
+```
+
+**Important:** Your workload VMs must set a hostname in cloud-init:
+```yaml
+#cloud-config
+hostname: pg-primary
+fqdn: pg-primary.sre-alpha.internal
+manage_etc_hosts: true
+```
+
+#### Wiring K8s pods to internal DNS (CoreDNS stub zone)
+
+K8s pods use CoreDNS for DNS, not VyOS directly. Apply the stub zone so pods can resolve internal VM FQDNs:
+
+```bash
+cp coredns_stub_zone.tf.example coredns_stub_zone.tf
+# Set rke2_kubeconfig_path in terraform.tfvars
+terraform apply
+```
+
+Verify (CoreDNS hot-reloads within 30 seconds — no restart needed):
+```bash
+kubectl run dns-test --image=busybox:1.36 --restart=Never -it --rm -- \
+  nslookup pg-primary.sre-alpha.internal
+# Expected: Address: 10.N.3.x
+
+# Your app deployments can now use FQDNs:
+# postgresql://pg-primary.sre-alpha.internal:5432/mydb
+# redis://redis.sre-alpha.internal:6379
+# http://vault.sre-alpha.internal:8200
+```
+
+> See AGENT.md Section 15 for full DNS architecture and troubleshooting.
+
+### 3.7 Adding a New Team (Platform Admin)
 
 **Role:** `[PLATFORM]`
 
@@ -841,7 +891,7 @@ stringData:
 
 > `terraform apply` on `infra/` is **safe to run** any time — it only adds new resources for new teams. Existing team resources are untouched.
 
-### 3.7 Rotating a Team's Kubeconfig
+### 3.8 Rotating a Team's Kubeconfig
 
 **Role:** `[PLATFORM]`
 
@@ -856,7 +906,7 @@ The kubeconfig token has a 1-year expiry by default. To rotate:
 
 The team updates their local kubeconfig file — no Terraform changes needed.
 
-### 3.8 Updating Team Resource Quotas
+### 3.9 Updating Team Resource Quotas
 
 **Role:** `[PLATFORM]`
 
@@ -867,7 +917,7 @@ cd infra/
 terraform apply
 ```
 
-### 3.9 Running the VLAN Conflict Audit
+### 3.10 Running the VLAN Conflict Audit
 
 **Role:** `[PLATFORM]`
 

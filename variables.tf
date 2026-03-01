@@ -131,6 +131,17 @@ variable "upstream_dns" {
   default     = ["8.8.8.8", "1.1.1.1"]
 }
 
+variable "dns_domain" {
+  description = "Internal DNS domain for this team's VPC (e.g. sre-alpha.internal). VyOS serves this zone authoritatively; VMs become resolvable as hostname.dns_domain via DHCP lease registration."
+  type        = string
+  default     = "sre-alpha.internal"
+
+  validation {
+    condition     = can(regex("^[a-z0-9-]+\\.[a-z]{2,}$", var.dns_domain))
+    error_message = "dns_domain must be a simple two-label domain like sre-alpha.internal."
+  }
+}
+
 # ── Workload Stack ──
 variable "rancher_mgmt_cidr" {
   description = "CIDR of the Rancher management network; VyOS allows port 6443 from here into the PRIVATE VLAN"

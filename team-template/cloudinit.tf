@@ -63,6 +63,13 @@ locals {
       - set service dns forwarding listen-address '${var.vlans.data.gateway}'
       - set service dns forwarding system
 
+      # ── Internal DNS zone (serves DHCP hostnames as FQDNs) ──
+      # VMs that set a hostname in cloud-init become resolvable as
+      # <hostname>.${var.dns_domain} from all VLANs via VyOS dnsmasq.
+      - set service dns forwarding options 'local=/${var.dns_domain}/'
+      - set service dns forwarding options 'expand-hosts'
+      - set service dns forwarding options 'domain=${var.dns_domain}'
+
       # ══════════════════════════════════════
       # DHCP Servers — Per VLAN
       # ══════════════════════════════════════
@@ -71,21 +78,25 @@ locals {
       - set service dhcp-server shared-network-name PUBLIC subnet ${var.vlans.public.cidr} range 0 stop '${cidrhost(var.vlans.public.cidr, 200)}'
       - set service dhcp-server shared-network-name PUBLIC subnet ${var.vlans.public.cidr} default-router '${var.vlans.public.gateway}'
       - set service dhcp-server shared-network-name PUBLIC subnet ${var.vlans.public.cidr} name-server '${var.vlans.public.gateway}'
+      - set service dhcp-server shared-network-name PUBLIC subnet ${var.vlans.public.cidr} domain-name '${var.dns_domain}'
       # Private VLAN
       - set service dhcp-server shared-network-name PRIVATE subnet ${var.vlans.private.cidr} range 0 start '${cidrhost(var.vlans.private.cidr, 100)}'
       - set service dhcp-server shared-network-name PRIVATE subnet ${var.vlans.private.cidr} range 0 stop '${cidrhost(var.vlans.private.cidr, 200)}'
       - set service dhcp-server shared-network-name PRIVATE subnet ${var.vlans.private.cidr} default-router '${var.vlans.private.gateway}'
       - set service dhcp-server shared-network-name PRIVATE subnet ${var.vlans.private.cidr} name-server '${var.vlans.private.gateway}'
+      - set service dhcp-server shared-network-name PRIVATE subnet ${var.vlans.private.cidr} domain-name '${var.dns_domain}'
       # System VLAN
       - set service dhcp-server shared-network-name SYSTEM subnet ${var.vlans.system.cidr} range 0 start '${cidrhost(var.vlans.system.cidr, 100)}'
       - set service dhcp-server shared-network-name SYSTEM subnet ${var.vlans.system.cidr} range 0 stop '${cidrhost(var.vlans.system.cidr, 200)}'
       - set service dhcp-server shared-network-name SYSTEM subnet ${var.vlans.system.cidr} default-router '${var.vlans.system.gateway}'
       - set service dhcp-server shared-network-name SYSTEM subnet ${var.vlans.system.cidr} name-server '${var.vlans.system.gateway}'
+      - set service dhcp-server shared-network-name SYSTEM subnet ${var.vlans.system.cidr} domain-name '${var.dns_domain}'
       # Data VLAN
       - set service dhcp-server shared-network-name DATA subnet ${var.vlans.data.cidr} range 0 start '${cidrhost(var.vlans.data.cidr, 100)}'
       - set service dhcp-server shared-network-name DATA subnet ${var.vlans.data.cidr} range 0 stop '${cidrhost(var.vlans.data.cidr, 200)}'
       - set service dhcp-server shared-network-name DATA subnet ${var.vlans.data.cidr} default-router '${var.vlans.data.gateway}'
       - set service dhcp-server shared-network-name DATA subnet ${var.vlans.data.cidr} name-server '${var.vlans.data.gateway}'
+      - set service dhcp-server shared-network-name DATA subnet ${var.vlans.data.cidr} domain-name '${var.dns_domain}'
 
       # ══════════════════════════════════════
       # FIREWALL — Zone-based policy
