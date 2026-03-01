@@ -200,6 +200,26 @@ variable "dns_domain" {
   }
 }
 
+variable "extra_service_dns" {
+  description = <<-EOT
+    Additional VyOS static-host-mapping entries for application-specific service names.
+    Key   = short hostname (e.g. "choreo", "vault", "registry")
+    Value = static IP in any of the four VLANs
+
+    The full FQDN will be <key>.<dns_domain>  (e.g. choreo.sre-alpha.internal)
+    IPs should be in the reserved range (.10-.99) of the relevant VLAN subnet.
+
+    Example for OpenChoreo:
+      extra_service_dns = {
+        "choreo"        = "10.1.0.10"   # Nginx LB in PUBLIC VLAN
+        "choreo-api"    = "10.1.0.10"   # Same LB, separate DNS name
+        "choreo-id"     = "10.1.0.10"   # Thunder IdP via same LB
+      }
+  EOT
+  type        = map(string)
+  default     = {}
+}
+
 # ── Workload Stack ──
 variable "rancher_mgmt_cidr" {
   description = "CIDR of the Rancher management network; VyOS allows port 6443 from here into the PRIVATE VLAN"

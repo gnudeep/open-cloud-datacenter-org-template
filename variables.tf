@@ -142,6 +142,17 @@ variable "dns_domain" {
   }
 }
 
+variable "extra_service_dns" {
+  description = <<-EOT
+    Additional VyOS static-host-mapping entries for application-specific service names.
+    Key   = short hostname (e.g. "choreo", "vault")
+    Value = static IP in any VLAN (.10-.99 reserved range)
+    Full FQDN = <key>.<dns_domain>
+  EOT
+  type        = map(string)
+  default     = {}
+}
+
 # ── Workload Stack ──
 variable "rancher_mgmt_cidr" {
   description = "CIDR of the Rancher management network; VyOS allows port 6443 from here into the PRIVATE VLAN"

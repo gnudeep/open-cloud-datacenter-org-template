@@ -97,6 +97,10 @@ Each `/22` block splits into 4 `/24` zones:
 lk-dc-org-template/
 ├── AGENT.md                    ← This file (reference for agents and engineers)
 │
+├── deployments/                ← Per-application deployment guides
+│   ├── README.md               ← Guide index + common prerequisites
+│   └── openchoreo.md           ← OpenChoreo v0.16+ full deployment guide
+│
 ├── infra/                      ← Platform team: run ONCE, cluster-scoped resources
 │   ├── main.tf                 ← ClusterNetwork + VLANConfig per node
 │   ├── namespaces_rbac.tf      ← Namespace + ServiceAccount + RoleBinding per team
@@ -782,3 +786,29 @@ env:
 | App cache (K8s pod) | `redis.default.svc.cluster.local:6379` |
 | Vault DB backend (SYSTEM VM) | `postgres.sre-alpha.internal:5432` |
 | Direct VM access | `postgres.sre-alpha.internal:5432` |
+
+### 15.7 Application-specific DNS names (extra_service_dns)
+
+For workloads that expose their own endpoints (e.g. a load balancer IP in the PUBLIC VLAN),
+use the `extra_service_dns` variable in `terraform.tfvars`:
+
+```hcl
+extra_service_dns = {
+  # Key = short hostname, Value = static IP in any VLAN (.10-.99 range)
+  # Full FQDN = <key>.<dns_domain>
+  "choreo"     = "10.N.0.10"   # Nginx LB in PUBLIC VLAN for OpenChoreo
+  "choreo-api" = "10.N.0.10"   # same IP, separate DNS name
+  "choreo-id"  = "10.N.0.10"   # Thunder IdP via same LB
+  "vault"      = "10.N.2.11"   # HashiCorp Vault in SYSTEM VLAN
+  "registry"   = "10.N.2.12"   # Container registry in SYSTEM VLAN
+}
+```
+
+After `terraform apply`, VyOS registers these via `set system static-host-mapping`.
+Each entry resolves from all VLANs and from K8s pods (via CoreDNS stub zone).
+
+**Deployment guides** in `deployments/` document exactly which entries each workload needs:
+
+| Guide | Extra DNS entries |
+|-------|------------------|
+| [`deployments/openchoreo.md`](../deployments/openchoreo.md) | `choreo`, `choreo-api`, `choreo-id` |
