@@ -1,22 +1,25 @@
-# Repository Review Report
+# Repository Review Report (Updated)
+
+## Scope
+Static review of Terraform stacks and supporting scripts/docs in the current repository state.
 
 ## Findings (ordered by severity)
 
-### 1. Critical: OpenChoreo Helm values contain duplicate YAML keys that override required config
-- Severity: Critical
+### 1. High: Root `terraform.tfvars.example` contains invalid CIDRs for `system` and `data` VLANs
+- Severity: High
 - Files:
-- `deployments/openchoreo/openchoreo_cp.tf:46`
-- `deployments/openchoreo/openchoreo_cp.tf:98`
-- `deployments/openchoreo/openchoreo_cp.tf:63`
-- `deployments/openchoreo/openchoreo_cp.tf:107`
+- `terraform.tfvars.example:41`
+- `terraform.tfvars.example:46`
+- Supporting reference:
+- `variables.tf:53`
 - Problem:
-The inline YAML passed to `helm_release.openchoreo_cp` defines `backstage:` twice and `kgateway:` twice. In YAML, duplicate keys are not merged; later keys override earlier keys.
+The example uses `10.300.0.0/24` and `10.400.0.0/24`, which are invalid IPv4 CIDRs.
 - Impact:
-`backstage.database` configuration can be dropped, and `kgateway.service.type`/NodePort settings can be overwritten. This can break DB wiring and ingress behavior while appearing syntactically valid.
+Users copying this example will fail plan/apply or create inconsistent network assumptions versus the variable formula (`10.N.x.0/24`).
 - Recommendation:
-Merge each duplicated block into a single `backstage` and single `kgateway` mapping.
+Update example values to valid per-team subnets (for example `10.1.2.0/24` and `10.1.3.0/24` for `N=1`).
 
-### 2. High: Multiple team-template examples reference a non-existent Terraform resource name
+### 2. High: Team examples reference a non-existent Terraform resource name
 - Severity: High
 - Files:
 - `team-template/rke2_cluster.tf.example:86`
@@ -27,79 +30,80 @@ Merge each duplicated block into a single `backstage` and single `kgateway` mapp
 - Supporting definition:
 - `team-template/networks.tf:5`
 - Problem:
-Examples reference `harvester_network.vlans[...]`, but the actual resource is `harvester_network.vpc_vlans`.
+Examples reference `harvester_network.vlans[...]`, but the declared resource is `harvester_network.vpc_vlans`.
 - Impact:
-Copying these examples into active `.tf` files causes immediate Terraform plan/apply failures (`Reference to undeclared resource`).
+Copying examples into active `.tf` files causes immediate Terraform failures (`Reference to undeclared resource`).
 - Recommendation:
-Replace `harvester_network.vlans` with `harvester_network.vpc_vlans` across all examples.
+Replace `harvester_network.vlans` with `harvester_network.vpc_vlans` in all affected example files.
 
-### 3. High: TLS copy provisioner hardcodes an SSH private key path and likely fails on many environments
+### 3. High: `rke2_cluster.tf.example` bootstrapping logic is inconsistent for control-plane vs worker nodes
 - Severity: High
+- Files:
+- `team-template/rke2_cluster.tf.example:55`
+- `team-template/rke2_cluster.tf.example:57`
+- `team-template/rke2_cluster.tf.example:58`
+- `team-template/rke2_cluster.tf.example:59`
+- Problem:
+A single cloud-init template is reused for both control-plane and worker VMs, sets `server:` to `cluster_registration_token.manifest_url`, and starts `rke2-server` on all nodes.
+- Impact:
+Workers are not configured as agents, and `manifest_url` is not a stable substitute for the RKE2 server endpoint. This is likely to produce failed or incorrect cluster registration/bootstrapping.
+- Recommendation:
+Split cloud-init by role (`rke2-server` for control plane, `rke2-agent` for workers) and use Rancher-supported registration flow/endpoint semantics.
+
+### 4. Medium: OpenChoreo Nginx TLS provisioning hardcodes a local SSH key path
+- Severity: Medium
 - File:
 - `deployments/openchoreo/nginx_lb.tf:186`
 - Problem:
-`private_key = file("~/.ssh/id_ed25519")` is hardcoded. This assumes key location, key type, and home expansion behavior. Terraform `file()` does not reliably resolve shell-style `~` in all contexts.
+`private_key = file("~/.ssh/id_ed25519")` assumes a specific key type/path and local filesystem layout.
 - Impact:
-Provisioning of TLS certs to Nginx can fail, leaving Nginx unusable (TLS files missing) after `apply`.
+`terraform apply` fails in environments using different key paths, key types, or SSH-agent-only workflows.
 - Recommendation:
-Introduce a variable for private key path and use an absolute path (or use `agent = true` SSH forwarding).
+Parameterize SSH auth (key path variable or `agent = true`) and avoid hardcoded home-path assumptions.
 
-### 4. High: Redis example deploys with empty password (`requirepass ""`)
-- Severity: High
+### 5. Medium: Redis example ships with authentication effectively disabled
+- Severity: Medium
 - File:
 - `team-template/kv_store.tf.example:71`
 - Problem:
-The provided default Redis config explicitly disables authentication.
+Redis config sets `requirepass ""`.
 - Impact:
-Any workload on allowed paths can access and mutate Redis data without auth, enabling lateral abuse and data tampering.
+Any reachable workload can access/modify Redis data without authentication.
 - Recommendation:
-Require authentication by default, source password from secret management, and document secure defaults.
+Require non-empty password by default, store it securely, and document rotation/secret-injection flow.
 
-### 5. Medium: Postgres secrets and passwords are injected into cloud-init/state in plaintext
+### 6. Medium: CoreDNS customization resource can overwrite shared `coredns-custom` ownership
 - Severity: Medium
 - Files:
-- `team-template/postgresql_ha.tf.example:99`
-- `team-template/postgresql_ha.tf.example:100`
-- `deployments/openchoreo/choreo_k8s_setup.tf:65`
-- `deployments/openchoreo/choreo_k8s_setup.tf:88`
+- `deployments/openchoreo/choreo_k8s_services.tf:106`
+- `team-template/coredns_stub_zone.tf.example:60`
 - Problem:
-Database credentials are passed through Terraform-managed strings and cloud-init content.
+Both stacks manage the same `kube-system/coredns-custom` ConfigMap directly.
 - Impact:
-Sensitive values may be exposed in Terraform state, logs, and VM metadata paths unless state/backend protections are strict.
+Applying one stack can overwrite keys managed by another stack/tool, causing DNS regression and drift.
 - Recommendation:
-Use external secret stores (Vault, SOPS, or platform secret manager), and avoid embedding sensitive values in cloud-init where possible.
+Use a single owner for `coredns-custom`, or merge existing keys explicitly (or move to a dedicated, centrally-managed DNS customization workflow).
 
-### 6. Medium: Code style consistency check fails across many Terraform files
-- Severity: Medium
-- Evidence:
-- `terraform fmt -check -recursive` returned non-zero and listed multiple files (`cloudinit.tf`, `infra/namespaces_rbac.tf`, `deployments/openchoreo/*.tf`, etc.).
-- Impact:
-Higher review noise and avoidable diffs; harder to enforce stable IaC standards in CI.
-- Recommendation:
-Run `terraform fmt -recursive` and add a CI formatting gate.
-
-### 7. Low: README prerequisites conflict with Terraform constraint
+### 7. Low: Gateway API CRDs are fetched at apply time without integrity pinning
 - Severity: Low
-- Files:
-- `README.md:32`
-- `provider.tf:2`
+- File:
+- `deployments/openchoreo/choreo_prereqs.tf:31`
 - Problem:
-README states `Terraform >= 1.0`, while code requires `>= 1.5.0`.
+`kubectl apply -f https://...` pulls manifests live during apply based only on version tag.
 - Impact:
-Users on 1.0-1.4 will fail after following docs.
+Reduced reproducibility and weaker supply-chain guarantees.
 - Recommendation:
-Align README with actual requirement (`>= 1.5.0`).
+Vendor/pin CRD manifests in-repo (or verify checksums/signatures) and apply from known content.
 
 ## Open Questions / Assumptions
-- Assumed `team-template/*.example` files are intended to be copied into production `.tf` files without additional manual refactoring.
-- Assumed OpenChoreo chart values in `openchoreo_cp.tf` are meant to include both DB wiring and resource settings simultaneously (current duplicate keys prevent that reliably).
+- Assumed `team-template/*.example` files are intended to be copied and applied with minimal edits.
+- Assumed `team-template/rke2_cluster.tf.example` is expected to produce a functional Rancher-managed RKE2 cluster as-is after standard variable filling.
 
-## Residual Risks and Testing Gaps
-- No automated Terraform validation/lint pipeline is present in this repository snapshot.
-- No integration test harness for critical deployment flows (`infra` -> `team-template` -> `deployments/openchoreo`).
-- Network and policy behavior (Kyverno + VyOS firewall + CoreDNS stub zones) is documented but not regression-tested in CI.
+## Residual Risks / Gaps
+- This review is static analysis only; no live infrastructure apply was executed.
+- No automated end-to-end validation exists across `infra` -> `team-template` -> `deployments/openchoreo` workflows.
 
 ## Suggested Next Actions
-1. Fix the two blocking classes first: duplicate YAML keys in `openchoreo_cp.tf` and broken resource references in team examples.
-2. Parameterize SSH private key handling for Nginx TLS copy and remove insecure defaults from Redis example.
-3. Add CI checks: `terraform fmt -check -recursive`, `terraform validate` per workspace, and optionally `tflint`.
+1. Fix blocking template correctness issues first (`terraform.tfvars.example` CIDRs, `harvester_network.vlans` references, RKE2 role bootstrap split).
+2. Harden operational/security defaults (SSH auth parameterization, Redis auth defaults).
+3. Define a single ownership model for `coredns-custom` and pin external CRD artifacts for deterministic applies.
